@@ -33,6 +33,17 @@ button:disabled{opacity:.5;cursor:default}
 .fbar{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
 #btnFilter{font-family:var(--mono);font-size:11.5px;padding:5px 10px;white-space:nowrap}
 #btnFilter.on{border-color:var(--accent);color:var(--accent)}
+.ltab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
+.ltab.on{border-color:var(--accent);color:var(--accent);background:#10212a}
+.atab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
+.atab.on{border-color:var(--warn);color:var(--warn);background:#2a2113}
+#alertBox{display:none;background:#10212a;border:1px solid var(--accent);border-radius:8px;
+  padding:9px 12px;margin-bottom:10px;font-size:12px;font-family:var(--mono)}
+#alertBox b{color:var(--accent)}
+#alertBox .x{float:right;cursor:pointer;color:var(--faint);padding:0 4px}
+#alertBox .hit{display:inline-block;margin-right:10px}
+#liveClock{font-family:var(--mono);font-size:11px;color:var(--faint)}
+td[data-last]{transition:color .4s ease}
 #fInfo{font-family:var(--mono);font-size:11px;color:var(--faint)}
 tr.empty td{text-align:center;color:var(--faint);font-size:12px;padding:14px 8px;cursor:pointer}
 tr.empty td:hover{color:var(--fg)}
@@ -113,6 +124,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
 </div>
 
 <div id="err"><b>Fetch failed.</b> <span id="errMsg"></span><pre id="errRaw"></pre></div>
+<div id="alertBox"><span class="x" id="alertX">&times;</span><b>New signal</b> <span id="alertList"></span></div>
 
 <details class="cfg">
   <summary>Settings — symbols, thresholds, refresh</summary>
@@ -132,6 +144,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
     <div><label>SuperTrend ATR period</label><input id="cfgStP" type="number" value="21"></div>
     <div><label>SuperTrend factor</label><input id="cfgStF" type="number" step="0.1" value="2"></div>
     <div><label>Auto-refresh (seconds)</label><input id="cfgEvery" type="number" value="60" min="20"></div>
+    <div><label>Live price every (seconds)</label><input id="cfgLive" type="number" value="5" min="3" title="One request covers every symbol. It updates prices only - it does not rebuild bricks or re-score the gates."></div>
     <div><label>Fire on</label><select id="cfgMode"><option value="signal">Signal — gates + first opposite brick</option><option value="bias">Bias — gates only</option></select></div>
     <div><label>Source (match your chart)</label><select id="cfgSrc"><option value="close">Close — TradingView's default</option><option value="ohlc">OHLC — only if you changed it</option></select></div>
     <div><label>Brick size</label><select id="cfgBrickMode"><option value="tv">TradingView rule — % of last price, snapped to the 1 / 1.5 / 2 / 2.5 ladder</option><option value="ltp">Exact % of last price, tick-rounded only</option><option value="running">Recomputed each brick</option></select></div>
@@ -142,6 +155,9 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
 
 <div class="fbar">
   <button id="btnFilter" class="on">▸ Signals only</button>
+  <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT at a brick size that was not signalling on the previous scan. Only fires while this page is open and scanning.">alerts</button>
+  <button id="btnLive" class="ltab on" title="Poll every symbol's current price in one request and update the Last column and the 4h chart's forming candle. The renko bricks are NOT redrawn - a brick only exists once price has moved a full brick - and the gates are not re-scored.">live</button>
+  <span id="liveClock"></span>
   <span id="fInfo"></span>
 </div>
 
@@ -471,21 +487,37 @@ async function loadSymbol(sym,c,wantDays){
 // renko. EMA21 needs far more than 10 closes to be meaningful, so ~240 candles (40 days)
 // are fetched and only the tail is drawn. Fetched once per symbol per session, and only
 // when you actually open a symbol -- it must not slow the scan down.
-const h4={};              // symbol -> {bars,e5,e21,r,w5,w11,w21} | 'loading' | 'failed'
+// !! THIS CACHE USED TO BE PERMANENT. `if(h4[sym]) return h4[sym]` meant a symbol's 4h
+// candles were fetched once per browser session and never again, so a tab left open
+// showed a 4h chart frozen at whenever you first opened that symbol -- missing the
+// newest candle, while the candlestick scanner beside it showed the current one.
+// Now the data carries a timestamp and is refetched once it is older than the TTL.
+// Re-opening the same symbol within the TTL still costs nothing.
+const h4={}, h4At={}, h4Busy={};
+const H4_TTL = 60000;     // ms before the cached 4h candles are considered stale
 let CFG4={rsiLen:21,w5:5,w11:11,w21:21};   // lengths captured at scan time for the 4h RSI
 async function load4h(sym){
-  if(h4[sym]) return h4[sym];
-  h4[sym]='loading';
-  try{
-    const now=Math.floor(Date.now()/1000);
-    const rows=await fetchCandles(sym.replace(/\.P$/,''),'4h',now-240*14400,now);
-    if(!rows.length) throw new Error('no 4h candles');
-    const cl=rows.map(r=>r.c);
-    const hr=rsi(cl,CFG4.rsiLen);
-    h4[sym]={bars:rows, e5:ema(cl,5), e21:ema(cl,21),
-             r:hr, w5:wma(hr,CFG4.w5), w11:wma(hr,CFG4.w11), w21:wma(hr,CFG4.w21)};
-  }catch(e){ h4[sym]='failed'; }
-  return h4[sym];
+  const have=h4[sym];
+  const fresh = have && have!=='failed' && (Date.now()-(h4At[sym]||0) < H4_TTL);
+  if(fresh) return have;
+  if(h4Busy[sym]) return h4Busy[sym];          // one fetch in flight per symbol
+  h4Busy[sym]=(async()=>{
+    try{
+      const now=Math.floor(Date.now()/1000);
+      const rows=await fetchCandles(sym.replace(/\.P$/,''),'4h',now-240*14400,now);
+      if(!rows.length) throw new Error('no 4h candles');
+      const cl=rows.map(r=>r.c);
+      const hr=rsi(cl,CFG4.rsiLen);
+      h4[sym]={bars:rows, e5:ema(cl,5), e21:ema(cl,21),
+               r:hr, w5:wma(hr,CFG4.w5), w11:wma(hr,CFG4.w11), w21:wma(hr,CFG4.w21)};
+      h4At[sym]=Date.now();
+    }catch(e){
+      // a failed refresh keeps the last good candles rather than blanking the pane
+      if(!h4[sym]) h4[sym]='failed';
+    }finally{ delete h4Busy[sym]; }
+    return h4[sym];
+  })();
+  return h4Busy[sym];
 }
 
 // ---------------------------------------------------------------- evaluation
@@ -528,6 +560,127 @@ function evaluate(bars,pct,c,sym){
           sig: long?1:short?-1:0, gates: long?g:short?gs:g, dirLabel: long?'LONG':short?'SHORT':'—'};
 }
 
+// ---------------------------------------------------------------- alerts
+// Fires only while this page is OPEN and scanning -- a backgrounded or suspended tab
+// stops refreshing and nothing fires. Sound, banner and tab badge work everywhere.
+// The OS notification is attempted only where it can work: Chrome treats a file://
+// page as a secure context so it normally succeeds on DESKTOP, while on a PHONE the
+// plain constructor throws (MDN: "throws a TypeError ... in nearly all mobile
+// browsers") and the throw is caught, leaving sound and banner.
+let alertsOn=true, actx=null, titleBase=document.title, badge=0;
+const lastSig={};              // 'SYM@brick%' -> the signal seen on the previous scan
+
+function beep(n){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==='suspended') actx.resume();
+    const t0=actx.currentTime;
+    for(let i=0;i<Math.min(n,3);i++){
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.type='sine'; o.frequency.value=880;
+      const st=t0+i*0.22;
+      g.gain.setValueAtTime(0.0001,st);
+      g.gain.exponentialRampToValueAtTime(0.25,st+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,st+0.18);
+      o.connect(g); g.connect(actx.destination); o.start(st); o.stop(st+0.2);
+    }
+  }catch(e){ /* blocked before any gesture, or no audio -- the banner still shows */ }
+}
+
+// A signal is NEW when that symbol AND brick size was not already showing the same
+// signal on the previous scan, so a row that stays LONG alerts once, not every pass.
+function freshSignals(c){
+  const out=[];
+  for(const sym of c.syms){
+    const r=results[sym]; if(!r||!r.ev) continue;
+    c.bricks.forEach((p,k)=>{
+      const ev=r.ev[k], key=sym+'@'+p;
+      const now=(ev&&ev.ok)?ev.sig:0;
+      if(now!==0 && now!==lastSig[key]) out.push({sym, tf:p+'%', dir:now});
+      lastSig[key]=now;
+    });
+  }
+  return out;
+}
+
+function osNotify(hits){
+  try{
+    if(!window.isSecureContext || !('Notification' in window)) return;
+    const fire=()=>{ try{
+      new Notification(`${hits.length} new signal${hits.length>1?'s':''}`,
+        {body:hits.map(h=>`${h.sym.replace(/\.P$/,'')} ${h.tf} ${h.dir===1?'LONG':'SHORT'}`).join('\n'),
+         tag:'delta-renko'});
+    }catch(e){} };
+    if(Notification.permission==='granted') fire();
+    else if(Notification.permission!=='denied') Notification.requestPermission().then(q=>{ if(q==='granted') fire(); });
+  }catch(e){}
+}
+
+function announce(hits){
+  if(!hits.length) return;
+  badge+=hits.length;
+  document.title=`(${badge}) ${titleBase}`;
+  $('alertList').innerHTML = hits.map(h=>
+    `<span class="hit" style="color:${h.dir===1?'var(--long)':'var(--short)'}">`+
+    `${h.sym.replace(/\.P$/,'')} ${h.tf} ${h.dir===1?'LONG':'SHORT'}</span>`).join('');
+  $('alertBox').style.display='block';
+  beep(hits.length);
+  osNotify(hits);
+}
+function clearBadge(){ badge=0; document.title=titleBase; $('alertBox').style.display='none'; }
+
+// ---------------------------------------------------------------- live price
+// ONE request refreshes every row: /v2/tickers returns every perpetual's current
+// price, so 24 symbols cost the same as 1.
+//
+// DELIBERATELY NOT TOUCHED: the renko bricks. A brick only exists once price has
+// travelled a full brick, so painting a half-formed one would be inventing a brick
+// TradingView has not drawn. The live price moves the Last column and the 4h
+// candlestick pane's forming candle; the bricks change only on a scan.
+// The gates are not re-scored either -- Scan, or Auto, still drives those.
+const live={}, livePrev={};
+let liveOn=true, liveTimer=null, redrawOpenDetail=null;
+
+async function pollLive(){
+  const c=cfg();
+  try{
+    const r=await fetch(`${API}/v2/tickers?contract_types=perpetual_futures`,
+                        {headers:{'Accept':'application/json'}});
+    const j=await r.json();
+    const want=new Set(c.syms.map(x=>x.replace(/\.P$/,'').toUpperCase()));
+    for(const t of (j.result||j.data||[])){
+      const sym=String(t.symbol||'').toUpperCase();
+      if(!want.has(sym)) continue;
+      const px=parseFloat(t.close ?? t.mark_price);
+      if(!isFinite(px)) continue;
+      livePrev[sym]=live[sym]; live[sym]=px;
+    }
+    paintLive();
+    $('liveClock').textContent='live '+new Date().toLocaleTimeString();
+  }catch(e){ $('liveClock').textContent='live feed unreachable'; }
+}
+
+// Cells are rewritten in place rather than re-rendering, so an open chart panel does
+// not close under you every few seconds.
+function paintLive(){
+  document.querySelectorAll('td[data-last]').forEach(td=>{
+    const sym=td.dataset.last, px=live[sym];
+    if(px==null) return;
+    td.textContent=fmt(px);
+    const was=livePrev[sym];
+    td.style.color = (was==null||px===was) ? '' : (px>was?'var(--long)':'var(--short)');
+  });
+  if(redrawOpenDetail) redrawOpenDetail();
+}
+
+function setLive(on){
+  liveOn=on;
+  $('btnLive').classList.toggle('on',on);
+  if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
+  if(on){ pollLive(); liveTimer=setInterval(pollLive, Math.max(3,+$('cfgLive').value)*1000); }
+  else $('liveClock').textContent='live off';
+}
+
 // ---------------------------------------------------------------- render
 let results={}, selected=null, signalsOnly=true;
 
@@ -567,7 +720,10 @@ function render(c){
     const td0=document.createElement('td'); td0.className='sym'; td0.textContent=sym.replace(/\.P$/,'');
     tr.appendChild(td0);
     const td1=document.createElement('td'); td1.className='num';
-    td1.textContent=row&&row.last!=null?fmt(row.last):'—'; tr.appendChild(td1);
+    td1.dataset.last=sym.replace(/\.P$/,'');
+    const lp=live[td1.dataset.last];
+    td1.textContent = lp!=null ? fmt(lp) : (row&&row.last!=null?fmt(row.last):'—');
+    tr.appendChild(td1);
     c.bricks.forEach((p,k)=>{
       const td=document.createElement('td'); const ev=row&&row.ev[k];
       const sp=document.createElement('span');
@@ -652,19 +808,25 @@ function paintRenko(cv,ev,c){
 
 // 4h PANE: the last 10 four-hour candles with EMA5 and EMA21 -- the higher-timeframe
 // picture the renko alone cannot show.
-function paint4h(cv,d){
+// livePx, when given, overrides the LAST 4h candle's close for drawing only. The
+// stored bars are untouched, so nothing feeding RSI or the EMAs sees a part-formed price.
+function paint4h(cv,d,livePx){
   const {x,W,H}=fitCanvas(cv,200);
   if(!d||d==='loading'||d==='failed'){
     x.fillStyle='#64748b'; x.font='11px ui-monospace,monospace'; x.textAlign='center';
     x.fillText(d==='failed'?'4h candles unavailable':'loading 4h …',W/2,H/2); return null; }
   const N=Math.min(15,d.bars.length), s=d.bars.length-N;
+  const lastB=d.bars[d.bars.length-1];
+  const shown=(livePx!=null && isFinite(livePx) && lastB)
+    ? {o:lastB.o, c:livePx, h:Math.max(lastB.h,livePx), l:Math.min(lastB.l,livePx)} : null;
+  const at=i=>(shown && i===d.bars.length-1) ? shown : d.bars[i];
   let lo=Infinity,hi=-Infinity;
-  for(let i=s;i<d.bars.length;i++){
-    lo=Math.min(lo,d.bars[i].l, d.e5[i]??d.bars[i].l, d.e21[i]??d.bars[i].l);
-    hi=Math.max(hi,d.bars[i].h, d.e5[i]??d.bars[i].h, d.e21[i]??d.bars[i].h); }
+  for(let i=s;i<d.bars.length;i++){ const bb=at(i);
+    lo=Math.min(lo,bb.l, d.e5[i]??bb.l, d.e21[i]??bb.l);
+    hi=Math.max(hi,bb.h, d.e5[i]??bb.h, d.e21[i]??bb.h); }
   const pad=(hi-lo)*0.10||1; lo-=pad; hi+=pad;
   const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N;
-  for(let i=0;i<N;i++){ const b=d.bars[s+i], cx=8+i*bw+bw/2, up=b.c>=b.o;
+  for(let i=0;i<N;i++){ const b=at(s+i), cx=8+i*bw+bw/2, up=b.c>=b.o;
     x.strokeStyle=x.fillStyle=up?'#2e9e5b':'#d6504a'; x.lineWidth=1;
     x.beginPath(); x.moveTo(cx,Y(b.h)); x.lineTo(cx,Y(b.l)); x.stroke();
     const yT=Y(Math.max(b.o,b.c)), yB=Y(Math.min(b.o,b.c));
@@ -779,12 +941,16 @@ function buildDetailRow(tb,sym,pct,ev,c){
   const cvRr=td.querySelector('.cvRr'), cv4r=td.querySelector('.cv4r');
   const wR=paintRenko(cvR,ev,c);
   paintRsi(cvRr,{r:ev.r,w5:ev.w5,w11:ev.w11,w21:ev.w21,N:wR.N,s:wR.s},c);
-  const draw4=()=>{ const w=paint4h(cv4,h4[sym]);
+  const draw4=()=>{ if(!cv4.isConnected) return;
+    const w=paint4h(cv4,h4[sym],live[sym.replace(/\.P$/,'')]);
     paintRsi(cv4r, w ? {r:h4[sym].r,w5:h4[sym].w5,w11:h4[sym].w11,w21:h4[sym].w21,N:w.N,s:w.s} : null, c); };
   draw4();
+  redrawOpenDetail=draw4;          // the live poll repaints exactly this panel
   // 4h is fetched lazily on first open, then repainted in place -- no re-render, so the
   // row does not jump while you are reading it.
-  if(!h4[sym]) load4h(sym).then(()=>{ if(cv4.isConnected) draw4(); });
+  // Always ask: load4h returns the cache instantly when it is still fresh, and
+  // refetches when it is not. Opening a symbol can no longer show hours-old candles.
+  load4h(sym).then(()=>{ if(cv4.isConnected) draw4(); });
 }
 
 // ---------------------------------------------------------------- run loop
@@ -831,16 +997,32 @@ async function scan(){
     setStatus(failed?`done — ${failed} symbol(s) failed`:'done', failed?'busy':'ok');
     if(failed) showErr(`${failed} symbol(s) failed. Others are live.`, firstErr?firstErr.message:'');
   }
+  const hits=freshSignals(c);
+  if(alertsOn) announce(hits);
   $('clock').textContent='last: '+new Date().toLocaleTimeString();
   busy=false; $('btnScan').disabled=false;
 }
 $('btnFilter').onclick=()=>{ signalsOnly=!signalsOnly; render(cfg()); };
+$('alertX').onclick=clearBadge;
+$('btnAlert').onclick=()=>{
+  alertsOn=!alertsOn;
+  $('btnAlert').classList.toggle('on',alertsOn);
+  if(!alertsOn) clearBadge();
+  // Unlock audio on this gesture: browsers refuse sound until the page is interacted
+  // with, and a scan fired by the auto-timer does not count as an interaction.
+  else try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); actx.resume(); }catch(e){}
+};
+$('btnLive').onclick=()=>setLive(!liveOn);
+$('cfgLive').onchange=()=>{ if(liveOn) setLive(true); };
 $('btnScan').onclick=scan;
 $('btnAuto').onclick=()=>{ if(timer){clearInterval(timer);timer=null;$('btnAuto').textContent='Auto: off';}
   else{ const s=Math.max(20,cfg().every); timer=setInterval(scan,s*1000);
         $('btnAuto').textContent=`Auto: ${s}s`; scan(); } };
 render(cfg());
 setStatus('ready — press Scan now');
+// Prices start flowing immediately, before any scan, so the clock proves the feed is
+// alive even on a page you have only just opened.
+setLive(true);
 </script>
 </body>
 </html>
