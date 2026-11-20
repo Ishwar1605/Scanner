@@ -39,6 +39,10 @@ button:disabled{opacity:.5;cursor:default}
 .ftab.on{border-color:var(--long);color:var(--long);background:var(--long-bg)}
 .atab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
 .atab.on{border-color:var(--warn);color:var(--warn);background:#2a2113}
+.ltab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
+.ltab.on{border-color:var(--accent);color:var(--accent);background:#10212a}
+#liveClock{font-family:var(--mono);font-size:11px;color:var(--faint)}
+td[data-last]{transition:color .4s ease}
 #alertBox{display:none;background:#10212a;border:1px solid var(--accent);border-radius:8px;
   padding:9px 12px;margin-bottom:10px;font-size:12px;font-family:var(--mono)}
 #alertBox b{color:var(--accent)}
@@ -141,6 +145,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
     <div><label>1D bias filter on the 4H column</label><select id="cfgHtf"><option value="on">On &mdash; 4H needs the Day aligned</option><option value="off">Off</option></select></div>
     <div><label>Candles to draw</label><input id="cfgDraw" type="number" value="40" min="10" max="120"></div>
     <div><label>Auto-refresh (seconds)</label><input id="cfgEvery" type="number" value="300" min="60"></div>
+    <div><label>Live price every (seconds)</label><input id="cfgLive" type="number" value="5" min="3" title="One request covers every symbol, so this is cheap. It updates prices only - it does not re-score the gates."></div>
     <textarea id="cfgSyms"></textarea>
   </div>
 </details>
@@ -155,9 +160,11 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   <button class="dtab" data-d="2">2%</button>
   <button class="dtab on" data-d="3">3%</button>
   <button class="dtab" data-d="5">5%</button>
+  <button id="btnLive" class="ltab on" title="Poll every symbol's current price in a single request and update the Last column and the open chart's forming candle. Gates are NOT re-evaluated - press Scan or leave Auto on for those.">live</button>
   <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT that was not signalling on the previous pass. Only fires while this page is open and running.">alerts</button>
   <button id="btnFlip" class="ftab on" title="Require a candle colour FLIP - green after red for a long, red after green for a short - so a symbol fires on the turn rather than on every candle of a run. Off reports the gate state only, and each cell then scores out of one less.">flip</button>
   <span id="dNote"></span>
+  <span id="liveClock"></span>
 </div>
 
 <table>
@@ -357,17 +364,23 @@ function fitCanvas(cv,cssH){
 
 // CANDLES with the price EMA21 drawn over them, plus a marker showing where the last
 // open sits relative to that EMA -- the distance gate is measured from exactly there.
-function paintCandles(cv,bars,e,c,label){
+// livePx, when given, overrides the LAST candle's close for drawing only -- the stored
+// bar is untouched, so nothing that feeds the gates sees a half-formed price.
+function paintCandles(cv,bars,e,c,label,livePx){
   const {x,W,H}=fitCanvas(cv,200);
   if(!bars||!bars.length){ x.fillStyle='#64748b'; x.font='11px ui-monospace,monospace';
     x.textAlign='center'; x.fillText('no '+label+' data',W/2,H/2); return null; }
   const N=Math.min(W<420?Math.min(24,c.draw):c.draw, bars.length), s=bars.length-N;
+  const last=bars[bars.length-1];
+  const shown = (livePx!=null && isFinite(livePx) && last)
+    ? {o:last.o, c:livePx, h:Math.max(last.h,livePx), l:Math.min(last.l,livePx)} : null;
+  const at=i=>(shown && i===bars.length-1) ? shown : bars[i];
   let lo=Infinity,hi=-Infinity;
-  for(let i=s;i<bars.length;i++){ lo=Math.min(lo,bars[i].l, e[i]??bars[i].l);
-                                  hi=Math.max(hi,bars[i].h, e[i]??bars[i].h); }
+  for(let i=s;i<bars.length;i++){ const b=at(i);
+    lo=Math.min(lo,b.l, e[i]??b.l); hi=Math.max(hi,b.h, e[i]??b.h); }
   const pad=(hi-lo)*0.08||1; lo-=pad; hi+=pad;
   const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N, X=i=>8+i*bw+bw/2;
-  for(let i=0;i<N;i++){ const b=bars[s+i], up=b.c>=b.o;
+  for(let i=0;i<N;i++){ const b=at(s+i), up=b.c>=b.o;
     x.strokeStyle=x.fillStyle=up?'#2e9e5b':'#d6504a'; x.lineWidth=1;
     x.beginPath(); x.moveTo(X(i),Y(b.h)); x.lineTo(X(i),Y(b.l)); x.stroke();
     const yT=Y(Math.max(b.o,b.c)), yB=Y(Math.min(b.o,b.c));
@@ -472,13 +485,18 @@ function buildDetailRow(tb,sym,tfKey,row,c){
       ('htf' in g ? mk('1D bias', row.bias===1?'bull':row.bias===-1?'bear':'flat', g.htf) : '')+
     `</div>`;
   tb.appendChild(tr);
-  for(const cv of td.querySelectorAll('canvas.px')){
-    const tf=cv.dataset.tf, st=store[sym+'@'+tf];
-    const bars=st?st.bars:null, ser=bars&&bars.length?series(bars,c):null;
-    const w=paintCandles(cv,bars,ser?ser.e:[],c,tf);
-    const rc=td.querySelector(`canvas.rs[data-tf="${tf}"]`);
-    paintRsi(rc, (w&&ser) ? {r:ser.r,w5:ser.w5,w11:null,w21:ser.w21,N:w.N,s:w.s} : null, c);
-  }
+  const draw=()=>{
+    for(const cv of td.querySelectorAll('canvas.px')){
+      if(!cv.isConnected) return;
+      const tf=cv.dataset.tf, st=store[sym+'@'+tf];
+      const bars=st?st.bars:null, ser=bars&&bars.length?series(bars,c):null;
+      const w=paintCandles(cv,bars,ser?ser.e:[],c,tf,live[sym.replace(/\.P$/,'')]);
+      const rc=td.querySelector(`canvas.rs[data-tf="${tf}"]`);
+      paintRsi(rc, (w&&ser) ? {r:ser.r,w5:ser.w5,w11:null,w21:ser.w21,N:w.N,s:w.s} : null, c);
+    }
+  };
+  draw();
+  redrawOpenDetail=draw;          // the live poll repaints exactly this panel
 }
 
 // Changing the distance cap changes only a GATE, never the data, so the tabs
@@ -494,6 +512,64 @@ function recompute(c){
                   ev:{'4h':evaluate(h4.bars,c,'4h',bias), '1d':evaluate(d1.bars,c,'1d',bias)},
                   bias};
   }
+}
+
+// ---------------------------------------------------------------- live price
+// ONE request refreshes every row. /v2/tickers returns every perpetual's current
+// price in a single response, so 24 symbols cost the same as 1 -- which is why this
+// can run every few seconds without hammering anything.
+//
+// WHAT IT DOES AND DOES NOT TOUCH: it updates the Last column and redraws the last
+// candle on an open chart. It does NOT re-evaluate the gates. A 4H candle's RSI, EMA
+// and spread do not meaningfully change tick to tick, and re-scoring 24 symbols every
+// few seconds would burn history requests for nothing. So the price moves live while
+// the LONG/SHORT cells stay as of the last scan -- press Scan, or leave Auto on, to
+// move those.
+//
+// The live price is kept OUT of the candle store on purpose. Writing it into the bars
+// would feed a half-formed price into RSI/EMA and make the gates disagree with the
+// scan that produced them; instead it is passed to the painter as an override.
+const live={}, livePrev={};
+let liveOn=true, liveTimer=null, redrawOpenDetail=null;
+
+async function pollLive(){
+  const c=cfg();
+  try{
+    const r=await fetch(`${API}/v2/tickers?contract_types=perpetual_futures`,
+                        {headers:{'Accept':'application/json'}});
+    const j=await r.json();
+    const want=new Set(c.syms.map(x=>x.replace(/\.P$/,'').toUpperCase()));
+    for(const t of (j.result||j.data||[])){
+      const sym=String(t.symbol||'').toUpperCase();
+      if(!want.has(sym)) continue;
+      const px=parseFloat(t.close ?? t.mark_price);
+      if(!isFinite(px)) continue;
+      livePrev[sym]=live[sym]; live[sym]=px;
+    }
+    paintLive();
+    $('liveClock').textContent='live '+new Date().toLocaleTimeString();
+  }catch(e){ $('liveClock').textContent='live feed unreachable'; }
+}
+
+// Cells are written in place rather than re-rendering the table, so an open chart
+// panel does not close under you every few seconds.
+function paintLive(){
+  document.querySelectorAll('td[data-last]').forEach(td=>{
+    const sym=td.dataset.last, px=live[sym];
+    if(px==null) return;
+    td.textContent=fmt(px);
+    const was=livePrev[sym];
+    td.style.color = (was==null||px===was) ? '' : (px>was?'var(--long)':'var(--short)');
+  });
+  if(redrawOpenDetail) redrawOpenDetail();
+}
+
+function setLive(on){
+  liveOn=on;
+  $('btnLive').classList.toggle('on',on);
+  if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
+  if(on){ pollLive(); liveTimer=setInterval(pollLive, Math.max(3,+$('cfgLive').value)*1000); }
+  else $('liveClock').textContent='live off';
 }
 
 // ---------------------------------------------------------------- alerts
@@ -607,7 +683,10 @@ function render(c){
     const td0=document.createElement('td'); td0.className='sym';
     td0.textContent=sym.replace(/\.P$/,''); tr.appendChild(td0);
     const td1=document.createElement('td'); td1.className='num';
-    td1.textContent=row&&row.last!=null?fmt(row.last):'\u2014'; tr.appendChild(td1);
+    td1.dataset.last=sym.replace(/\.P$/,'');
+    const lp=live[td1.dataset.last];
+    td1.textContent = lp!=null ? fmt(lp) : (row&&row.last!=null?fmt(row.last):'\u2014');
+    tr.appendChild(td1);
     for(const tf of TFS){
       const td=document.createElement('td'), ev=row&&row.ev[tf];
       const sp=document.createElement('span');
@@ -685,6 +764,8 @@ $('btnFilter').onclick=()=>{ signalsOnly=!signalsOnly; render(cfg()); };
 document.querySelectorAll('.dtab').forEach(t=>{
   t.onclick=()=>{ $('cfgDist').value=t.dataset.d; const c=cfg(); recompute(c); render(c); };
 });
+$('btnLive').onclick=()=>setLive(!liveOn);
+$('cfgLive').onchange=()=>{ if(liveOn) setLive(true); };
 $('alertX').onclick=clearBadge;
 $('btnAlert').onclick=()=>{
   alertsOn=!alertsOn;
@@ -706,6 +787,9 @@ $('btnAuto').onclick=()=>{ if(timer){clearInterval(timer);timer=null;$('btnAuto'
         $('btnAuto').textContent=`Auto: ${s}s`; scan(); } };
 render(cfg());
 setStatus('ready \u2014 press Scan now');
+// Prices start flowing immediately, before any scan -- you see the market move the
+// moment the page opens, and the Last column is populated even with no scan yet.
+setLive(true);
 </script>
 </body>
 </html>
