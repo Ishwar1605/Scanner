@@ -137,7 +137,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
     <div><label>Fast WMA (of RSI)</label><input id="cfgW5" type="number" value="5"></div>
     <div><label>Slow WMA (of RSI)</label><input id="cfgW21" type="number" value="21"></div>
     <div><label>Min RSI/WMA21 spread gap</label><input id="cfgGap" type="number" step="0.5" value="2" title="g21. A long needs RSI minus WMA21 to be at least this; a short needs WMA21 minus RSI. V59's default is 2.0."></div>
-    <div><label>Fire on</label><select id="cfgMode"><option value="signal">Signal &mdash; gates + candle colour flip</option><option value="bias">Bias &mdash; gates only, no flip</option></select></div>
+    <div><label>Fire on</label><select id="cfgMode"><option value="signal">Signal &mdash; gates + candle colour flip</option><option value="bias">Bias &mdash; colour only, no flip</option></select></div>
     <div><label>1D bias filter on the 4H column</label><select id="cfgHtf"><option value="on">On &mdash; 4H needs the Day aligned</option><option value="off">Off</option></select></div>
     <div><label>Candles to draw</label><input id="cfgDraw" type="number" value="40" min="10" max="120"></div>
     <div><label>Auto-refresh (seconds)</label><input id="cfgEvery" type="number" value="300" min="60"></div>
@@ -173,7 +173,9 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   &nbsp;&middot;&nbsp; <b>4/6</b> &mdash; evaluated, that many conditions passed on its stronger side; hover to see which failed, click to open it.
   &nbsp;&middot;&nbsp; <b>&middot;</b> &mdash; not enough history on that timeframe.
   <br><b>Conditions</b>, per timeframe: open on the correct side of EMA21 and within the distance cap &middot;
-  RSI21 vs WMA21 &middot; RSI/WMA21 spread gap &middot; WMA5 vs WMA21 &middot; candle colour flip (when Fire on = Signal).
+  RSI21 vs WMA21 &middot; RSI/WMA21 spread gap &middot; WMA5 vs WMA21 &middot; candle colour &mdash; a long needs
+  a GREEN candle and a short a RED one, always. With <b>flip</b> on, that same gate also demands the previous
+  candle be the opposite colour, so a symbol fires on the turn rather than on every candle of a run.
   The 4H column adds the 1D bias, so 4H scores out of one more than 1D.
   <br><b>The last candle is still forming</b>, so a 4H or 1D cell can change before that candle closes &mdash;
   the colour flip especially. This matches how your TradingView screener reads the live bar.
@@ -322,13 +324,20 @@ function evaluate(bars,c,tf,bias){
              rsi:  s.r[i]<s.w21[i],
              gap:  (s.w21[i]-s.r[i])>=c.minGap,
              fan:  s.w5[i]<s.w21[i] };
+  // CANDLE COLOUR IS UNCONDITIONAL: a long needs a GREEN candle, a short a RED one,
+  // whatever the flip tab says. With flip ON that requirement already sits inside the
+  // flip gate (green AND previous red), so it is not tested twice and the gate count
+  // is identical either way -- flip simply strengthens the same condition by also
+  // demanding the previous candle be the opposite colour.
+  // A doji (close == open) is neither green nor red, so it fires nothing.
   if(needFlip){ gL.flip = green&&pr; gS.flip = red&&pg; }
+  else        { gL.candle = green;   gS.candle = red;   }
   if(useHtf){ gL.htf = bias===1; gS.htf = bias===-1; }
 
   const nL=Object.values(gL).filter(Boolean).length, nS=Object.values(gS).filter(Boolean).length;
   const long=nL===Object.keys(gL).length, short=nS===Object.keys(gS).length;
   const side = nL>=nS?gL:gS, sideN=Math.max(nL,nS), total=Object.keys(gL).length;
-  return {ok:true, bars:bars.length, s, i, dist, green, red, total,
+  return {ok:true, bars:bars.length, s, i, dist, green, red, prevGreen:pg, prevRed:pr, total,
           score:sideN, failed:Object.keys(side).filter(k=>!side[k]),
           scoreSide: nL>=nS?'long':'short',
           sig: long?1:short?-1:0, gates: long?gL:short?gS:gL,
@@ -457,7 +466,9 @@ function buildDetailRow(tb,sym,tfKey,row,c){
       mk(`rsi vs wma${c.w21}`, `${ev.s.r[ev.i].toFixed(1)} / ${ev.s.w21[ev.i].toFixed(1)}`, g.rsi)+
       mk('g21 spread gap', (ev.s.r[ev.i]-ev.s.w21[ev.i]).toFixed(2), g.gap)+
       mk(`wma${c.w5} vs wma${c.w21}`, `${ev.s.w5[ev.i].toFixed(1)} / ${ev.s.w21[ev.i].toFixed(1)}`, g.fan)+
-      ('flip' in g ? mk('candle flip', (ev.green?'green':ev.red?'red':'doji')+' now', g.flip) : '')+
+      ('flip' in g ? mk('candle flip', (ev.green?'green':ev.red?'red':'doji')+' after '+
+          (ev.prevGreen?'green':ev.prevRed?'red':'doji'), g.flip) : '')+
+      ('candle' in g ? mk('candle colour', ev.green?'green':ev.red?'red':'doji', g.candle) : '')+
       ('htf' in g ? mk('1D bias', row.bias===1?'bull':row.bias===-1?'bear':'flat', g.htf) : '')+
     `</div>`;
   tb.appendChild(tr);
