@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Delta Candlestick Scanner</title>
+<style>
+:root{
+  --bg:#0e1319; --panel:#151c24; --panel2:#1b242e; --line:#28333f;
+  --fg:#e7eef5; --dim:#93a4b4; --faint:#64748b;
+  --long:#2e9e5b; --long-bg:#0f2a1b; --short:#d6504a; --short-bg:#2c1414;
+  --accent:#4ba3c3; --warn:#e0a458;
+  --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+     font:13px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1250px;margin:0 auto;padding:0 max(12px,env(safe-area-inset-left,0px)) 40px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;padding:16px 0 10px}
+h1{font-size:17px;font-weight:600;margin:0;letter-spacing:.01em}
+h1 span{color:var(--faint);font-weight:400}
+.spacer{flex:1 1 auto}
+button{font:inherit;font-size:12px;background:var(--panel2);color:var(--fg);
+       border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.go{background:var(--accent);border-color:var(--accent);color:#06131a;font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+.bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:9px 12px;
+     background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:12px;
+     font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+/* Signals-only filter, sitting directly above the table. */
+.fbar{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+#btnFilter{font-family:var(--mono);font-size:11.5px;padding:5px 10px;white-space:nowrap}
+#btnFilter.on{border-color:var(--accent);color:var(--accent)}
+.dtab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
+.dtab.on{border-color:var(--accent);color:var(--accent);background:#10212a}
+.ftab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
+.ftab.on{border-color:var(--long);color:var(--long);background:var(--long-bg)}
+.atab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
+.atab.on{border-color:var(--warn);color:var(--warn);background:#2a2113}
+#alertBox{display:none;background:#10212a;border:1px solid var(--accent);border-radius:8px;
+  padding:9px 12px;margin-bottom:10px;font-size:12px;font-family:var(--mono)}
+#alertBox b{color:var(--accent)}
+#alertBox .x{float:right;cursor:pointer;color:var(--faint);padding:0 4px}
+#alertBox .hit{display:inline-block;margin-right:10px}
+#dLabel,#dNote{font-family:var(--mono);font-size:11px;color:var(--faint)}
+#fInfo{font-family:var(--mono);font-size:11px;color:var(--faint)}
+tr.empty td{text-align:center;color:var(--faint);font-size:12px;padding:14px 8px;cursor:pointer}
+tr.empty td:hover{color:var(--fg)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:0 0 auto}
+.dot.ok{background:var(--long)}.dot.err{background:var(--short)}.dot.busy{background:var(--warn)}
+details.cfg{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:12px}
+details.cfg summary{cursor:pointer;padding:9px 12px;font-size:12px;color:var(--dim)}
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;padding:0 12px 12px}
+label{display:block;font-size:11px;color:var(--faint);margin-bottom:3px}
+input,textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+  border-radius:5px;padding:5px 7px;font-family:var(--mono);font-size:12px}
+textarea{min-height:64px;resize:vertical;grid-column:1/-1}
+table{width:100%;border-collapse:collapse;background:var(--panel);
+      border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th,td{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line);font-size:12.5px}
+th{background:var(--panel2);color:var(--dim);font-weight:500;font-size:11px;
+   text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;z-index:2}
+td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);text-align:right;
+       white-space:nowrap}
+/* The bricks column was wrapping "159 / 78 / 36" onto three lines, which made EVERY row
+   three lines tall on a phone. nowrap plus a smaller face is most of the compaction. */
+td.bricks{font-size:11px;color:var(--faint)}
+tr:hover td{background:#19222c}
+.cell{display:inline-block;min-width:54px;text-align:center;padding:2px 7px;border-radius:4px;
+      font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent}
+.cell.l{background:var(--long-bg);color:var(--long);border-color:#1e5536}
+.cell.s{background:var(--short-bg);color:var(--short);border-color:#5d2724}
+.cell.n{color:var(--faint)}
+.cell.sel{outline:2px solid var(--accent);outline-offset:1px}
+/* The detail is injected as a <tr> directly beneath the row you touched, so you read
+   it where your finger already is instead of scrolling to the foot of the page. */
+tr.detailrow>td{background:var(--panel2);padding:10px 8px;border-bottom:2px solid var(--accent)}
+.dhead{margin:0 0 2px;font-size:13px;font-family:var(--mono);font-weight:600}
+.dsub{color:var(--faint);font-size:11px;margin-bottom:8px;font-family:var(--mono);
+      word-break:break-word}
+.dwrap{display:grid;grid-template-columns:1fr 330px;gap:8px;align-items:start}
+@media(max-width:700px){ .dwrap{grid-template-columns:1fr} }
+.pane{position:relative}
+.plabel{position:absolute;top:4px;left:7px;font-size:9.5px;letter-spacing:.05em;
+        text-transform:uppercase;color:var(--faint);pointer-events:none}
+canvas{width:100%;height:200px;background:var(--bg);border:1px solid var(--line);
+       border-radius:6px;display:block}
+canvas.cvRr,canvas.cv4r{height:118px;margin-top:5px}
+.plabel.rsil{top:auto;bottom:4px}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:7px;margin-top:10px}
+.ro{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:6px 8px}
+.ro .k{font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
+.ro .v{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;margin-top:1px}
+.ro.pass .v{color:var(--long)} .ro.fail .v{color:var(--short)}
+#err{display:none;background:#2c1414;border:1px solid #5d2724;border-radius:8px;padding:11px 13px;
+     margin-bottom:12px;font-size:12px;color:#ffb3ae}
+#err pre{font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;word-break:break-all;
+         max-height:170px;overflow:auto;margin:7px 0 0;color:var(--dim)}
+footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
+@media(max-width:620px){
+  th,td{padding:4px 4px;font-size:12px}
+  th{font-size:10px;letter-spacing:.03em}
+  .cell{min-width:40px;padding:2px 4px}
+  td.bricks{font-size:10px}
+  h1{font-size:15px}
+  .wrap{padding-left:6px;padding-right:6px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Delta Candlestick Scanner <span id="hdrSub"></span></h1>
+  <span class="spacer"></span>
+  <button id="btnScan" class="go">Scan now</button>
+  <button id="btnAuto">Auto: off</button>
+</header>
+
+<div class="bar">
+  <span class="dot" id="dot"></span><span id="status">idle</span>
+  <span class="spacer"></span><span id="clock"></span>
+</div>
+
+<div id="err"><b>Fetch failed.</b> <span id="errMsg"></span><pre id="errRaw"></pre></div>
+<div id="alertBox"><span class="x" id="alertX">&times;</span><b>New signal</b> <span id="alertList"></span></div>
+
+<details class="cfg">
+  <summary>Settings &mdash; symbols, filters, refresh</summary>
+  <div class="cfg-grid">
+    <div><label>EMA length (price)</label><input id="cfgEma" type="number" value="21"></div>
+    <div><label>Max EMA distance % (from open)</label><input id="cfgDist" type="number" step="0.25" value="3" title="DIRECTIONAL and measured from the candle OPEN, exactly as your V2 4H screener measures it. A long needs the open ABOVE the EMA and within this cap; a short needs it BELOW and within this cap."></div>
+    <div><label>Allow wrong side by %</label><input id="cfgWrong" type="number" step="0.25" value="0" title="How far the open may sit on the WRONG side of the EMA and still qualify. 0 means it must be on the correct side."></div>
+    <div><label>RSI length</label><input id="cfgRsi" type="number" value="21"></div>
+    <div><label>Fast WMA (of RSI)</label><input id="cfgW5" type="number" value="5"></div>
+    <div><label>Slow WMA (of RSI)</label><input id="cfgW21" type="number" value="21"></div>
+    <div><label>Min RSI/WMA21 spread gap</label><input id="cfgGap" type="number" step="0.5" value="2" title="g21. A long needs RSI minus WMA21 to be at least this; a short needs WMA21 minus RSI. V59's default is 2.0."></div>
+    <div><label>Fire on</label><select id="cfgMode"><option value="signal">Signal &mdash; gates + candle colour flip</option><option value="bias">Bias &mdash; gates only, no flip</option></select></div>
+    <div><label>1D bias filter on the 4H column</label><select id="cfgHtf"><option value="on">On &mdash; 4H needs the Day aligned</option><option value="off">Off</option></select></div>
+    <div><label>Candles to draw</label><input id="cfgDraw" type="number" value="40" min="10" max="120"></div>
+    <div><label>Auto-refresh (seconds)</label><input id="cfgEvery" type="number" value="300" min="60"></div>
+    <textarea id="cfgSyms"></textarea>
+  </div>
+</details>
+
+<div class="fbar">
+  <button id="btnFilter" class="on">&#9656; Signals only</button>
+  <span id="fInfo"></span>
+</div>
+
+<div class="fbar">
+  <span id="dLabel">Max EMA distance</span>
+  <button class="dtab" data-d="2">2%</button>
+  <button class="dtab on" data-d="3">3%</button>
+  <button class="dtab" data-d="5">5%</button>
+  <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT that was not signalling on the previous pass. Only fires while this page is open and running.">alerts</button>
+  <button id="btnFlip" class="ftab on" title="Require a candle colour FLIP - green after red for a long, red after green for a short - so a symbol fires on the turn rather than on every candle of a run. Off reports the gate state only, and each cell then scores out of one less.">flip</button>
+  <span id="dNote"></span>
+</div>
+
+<table>
+  <thead><tr>
+    <th>Symbol</th><th>Last</th><th>4H</th><th>1D</th><th>1D bias</th><th>Bars</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<footer>
+  <b>Reading a cell.</b>
+  <span style="color:var(--long)">LONG</span> / <span style="color:var(--short)">SHORT</span> &mdash; every condition agrees.
+  &nbsp;&middot;&nbsp; <b>4/6</b> &mdash; evaluated, that many conditions passed on its stronger side; hover to see which failed, click to open it.
+  &nbsp;&middot;&nbsp; <b>&middot;</b> &mdash; not enough history on that timeframe.
+  <br><b>Conditions</b>, per timeframe: open on the correct side of EMA21 and within the distance cap &middot;
+  RSI21 vs WMA21 &middot; RSI/WMA21 spread gap &middot; WMA5 vs WMA21 &middot; candle colour flip (when Fire on = Signal).
+  The 4H column adds the 1D bias, so 4H scores out of one more than 1D.
+  <br><b>The last candle is still forming</b>, so a 4H or 1D cell can change before that candle closes &mdash;
+  the colour flip especially. This matches how your TradingView screener reads the live bar.
+  <br>Data: Delta Exchange India public API, fetched by this browser.
+</footer>
+</div>
+
+<script>
+'use strict';
+const API = 'https://api.india.delta.exchange';
+const DEFAULT_SYMS = ['BTCUSD.P','ETHUSD.P','XRPUSD.P','SOLUSD.P','BBUSD.P','SKYAIUSD.P',
+ 'RAVEUSD.P','TRXUSD.P','BNBUSD.P','DOGSUSD.P','XLMUSD.P','BCHUSD.P','DYDXUSD.P','DOGEUSD.P',
+ 'ADAUSD.P','AVAXUSD.P','1000SHIBUSD.P','LINKUSD.P','DOTUSD.P','LTCUSD.P','UNIUSD.P',
+ '1000PEPEUSD.P','SLVONUSD.P','VVVUSD.P'];
+const TFS = ['4h','1d'];
+const RES_SEC = {'4h':14400,'1d':86400};
+const WANT = {'4h':400, '1d':400};      // candles to pull per timeframe
+
+const $ = id => document.getElementById(id);
+const cfg = () => ({
+  emaLen:+$('cfgEma').value, maxDist:+$('cfgDist').value, wrongMax:+$('cfgWrong').value,
+  rsiLen:+$('cfgRsi').value, w5:+$('cfgW5').value, w21:+$('cfgW21').value,
+  minGap:+$('cfgGap').value, mode:$('cfgMode').value, useHtf:$('cfgHtf').value==='on',
+  draw:+$('cfgDraw').value, every:+$('cfgEvery').value,
+  syms:$('cfgSyms').value.split(/[\s,]+/).map(s=>s.trim().toUpperCase()).filter(Boolean)
+});
+$('cfgSyms').value = DEFAULT_SYMS.join(', ');
+
+function setStatus(t,k){ $('status').textContent=t;
+  $('dot').className='dot'+(k?' '+k:''); }
+
+// ---------------------------------------------------------------- indicators
+function rma(v,n){const o=[];let a=null;for(let i=0;i<v.length;i++){
+  if(i<n-1){o.push(null);continue;}
+  if(a===null){let s=0;for(let j=0;j<n;j++)s+=v[j];a=s/n;} else a=(a*(n-1)+v[i])/n;
+  o.push(a);} return o;}
+function rsi(v,n){if(v.length<n+1)return v.map(()=>null);
+  const g=[0],l=[0];
+  for(let i=1;i<v.length;i++){const d=v[i]-v[i-1];g.push(Math.max(d,0));l.push(Math.max(-d,0));}
+  const ag=rma(g,n),al=rma(l,n);
+  return v.map((_,i)=>(ag[i]===null||al[i]===null)?null:(al[i]===0?100:100-100/(1+ag[i]/al[i])));}
+function wma(v,n){const o=[],den=n*(n+1)/2;
+  for(let i=0;i<v.length;i++){ if(i<n-1){o.push(null);continue;}
+    let s=0,ok=true;
+    for(let j=0;j<n;j++){const x=v[i-n+1+j]; if(x===null||x===undefined){ok=false;break;} s+=x*(j+1);}
+    o.push(ok?s/den:null);} return o;}
+function ema(v,n){const o=[],k=2/(n+1);let e=null;
+  for(let i=0;i<v.length;i++){ if(i<n-1){o.push(null);continue;}
+    if(e===null){let s=0;for(let j=0;j<n;j++)s+=v[j];e=s/n;} else e=v[i]*k+e*(1-k);
+    o.push(e);} return o;}
+
+// ---------------------------------------------------------------- data
+async function fetchCandles(sym,res,startSec,endSec){
+  const u=`${API}/v2/history/candles?resolution=${encodeURIComponent(res)}`+
+          `&symbol=${encodeURIComponent(sym)}&start=${startSec}&end=${endSec}`;
+  const r=await fetch(u,{headers:{'Accept':'application/json'}});
+  const txt=await r.text();
+  if(!r.ok) throw new Error(`HTTP ${r.status} for ${sym} — ${txt.slice(0,300)}`);
+  let j; try{ j=JSON.parse(txt);}catch(e){ throw new Error(`Non-JSON reply for ${sym} — ${txt.slice(0,300)}`);}
+  if(j.success===false) throw new Error(`API said no for ${sym} — ${txt.slice(0,300)}`);
+  const rows=j.result||j.data||[];
+  if(!Array.isArray(rows)) throw new Error(`Unexpected shape for ${sym} — ${txt.slice(0,300)}`);
+  return rows.map(c=>({t:+(c.time??c.t??c[0]), o:+(c.open??c.o??c[1]),
+                       h:+(c.high??c.h??c[2]), l:+(c.low??c.l??c[3]), c:+(c.close??c.c??c[4])}))
+             .filter(c=>isFinite(c.t)&&isFinite(c.c)&&isFinite(c.h)&&isFinite(c.l))
+             .sort((a,b)=>a.t-b.t);
+}
+
+
+// One store per symbol per timeframe. Candles are slow-moving at 4h and 1d, so a pass
+// refetches only the tail once the deep load is done.
+const store={};
+async function loadTF(sym,tf){
+  const api=sym.replace(/\.P$/,''), step=RES_SEC[tf], now=Math.floor(Date.now()/1000);
+  const key=sym+'@'+tf, st=store[key];
+  if(st && st.bars.length){
+    const rows=await fetchCandles(api,tf,st.lastT,now);
+    for(const r of rows){
+      if(r.t>st.lastT){ st.bars.push(r); st.lastT=r.t; }
+      else if(r.t===st.lastT){ st.bars[st.bars.length-1]=r; }
+    }
+    return st;
+  }
+  // Walk backwards until the requested depth is reached, stopping early only when a
+  // call returns nothing new -- the same paging rule the renko scanner uses, because
+  // assuming a fixed page size is what under-fetched history there.
+  const stopAt=now-WANT[tf]*step;
+  let end=now, all=[], guard=0;
+  while(end>stopAt && guard++<20){
+    const start=Math.max(stopAt, end-500*step);
+    const rows=await fetchCandles(api,tf,start,end);
+    if(!rows.length) break;
+    all=rows.concat(all);
+    const earliest=rows[0].t;
+    if(earliest>=end) break;
+    end=earliest-step;
+  }
+  const seen=new Set(), bars=[]; let lastT=0;
+  for(const r of all){ if(seen.has(r.t))continue; seen.add(r.t); bars.push(r); lastT=Math.max(lastT,r.t); }
+  store[key]={bars,lastT};
+  return store[key];
+}
+
+// ---------------------------------------------------------------- evaluation
+// Every gate mirrors Ab IG Simple Screener V2 4H exactly:
+//   distance  -- DIRECTIONAL, measured from the OPEN: (open-ema)/ema*100, long needs
+//                that between -wrongMax and +maxDist, short needs the mirror.
+//   rsi/w21   -- long needs RSI above WMA21.
+//   gap (g21) -- long needs RSI minus WMA21 to be at least minGap. Not a duplicate of
+//                the test above: that asks which SIDE, this asks HOW FAR.
+//   fan       -- long needs WMA5 above WMA21. Both are WMAs OF THE RSI, not of price.
+//   flip      -- long needs a GREEN candle whose previous candle was RED, so a symbol
+//                fires on the turn rather than every candle of a run.
+//   htf       -- 4H only: the Day's RSI21 must be above its WMA21 for a long.
+// The HTF bias is read off the 1D series this scanner already holds, so it costs no
+// extra request and cannot disagree with the 1D column beside it.
+function series(bars,c){
+  const cl=bars.map(b=>b.c);
+  const r=rsi(cl,c.rsiLen);
+  return {cl, e:ema(cl,c.emaLen), r, w5:wma(r,c.w5), w21:wma(r,c.w21)};
+}
+function dayBias(bars,c){
+  if(!bars || bars.length < c.rsiLen+c.w21+5) return 0;
+  const s=series(bars,c), i=bars.length-1;
+  if(s.r[i]==null||s.w21[i]==null) return 0;
+  return s.r[i]>s.w21[i] ? 1 : s.r[i]<s.w21[i] ? -1 : 0;
+}
+function evaluate(bars,c,tf,bias){
+  const need=Math.max(c.rsiLen+c.w21, c.emaLen)+5;
+  if(!bars || bars.length<need) return {ok:false, bars:bars?bars.length:0, why:`needs ${need} candles`};
+  const s=series(bars,c), i=bars.length-1, b=bars[i];
+  if(s.e[i]==null||s.r[i]==null||s.w21[i]==null||s.w5[i]==null)
+    return {ok:false, bars:bars.length, why:'indicators not warm'};
+
+  const dist=(b.o-s.e[i])/s.e[i]*100;              // signed, from the OPEN
+  const green=b.c>b.o, red=b.c<b.o;
+  const pg=bars[i-1].c>bars[i-1].o, pr=bars[i-1].c<bars[i-1].o;
+  const needFlip=c.mode==='signal';
+  const useHtf = tf==='4h' && c.useHtf;
+
+  const gL={ dist: dist>=-c.wrongMax && dist<=c.maxDist,
+             rsi:  s.r[i]>s.w21[i],
+             gap:  (s.r[i]-s.w21[i])>=c.minGap,
+             fan:  s.w5[i]>s.w21[i] };
+  const gS={ dist: -dist>=-c.wrongMax && -dist<=c.maxDist,
+             rsi:  s.r[i]<s.w21[i],
+             gap:  (s.w21[i]-s.r[i])>=c.minGap,
+             fan:  s.w5[i]<s.w21[i] };
+  if(needFlip){ gL.flip = green&&pr; gS.flip = red&&pg; }
+  if(useHtf){ gL.htf = bias===1; gS.htf = bias===-1; }
+
+  const nL=Object.values(gL).filter(Boolean).length, nS=Object.values(gS).filter(Boolean).length;
+  const long=nL===Object.keys(gL).length, short=nS===Object.keys(gS).length;
+  const side = nL>=nS?gL:gS, sideN=Math.max(nL,nS), total=Object.keys(gL).length;
+  return {ok:true, bars:bars.length, s, i, dist, green, red, total,
+          score:sideN, failed:Object.keys(side).filter(k=>!side[k]),
+          scoreSide: nL>=nS?'long':'short',
+          sig: long?1:short?-1:0, gates: long?gL:short?gS:gL,
+          dirLabel: long?'LONG':short?'SHORT':'\u2014'};
+}
+
+// ---------------------------------------------------------------- drawing
+function fitCanvas(cv,cssH){
+  const dpr=window.devicePixelRatio||1;
+  const w=Math.max(160,Math.round(cv.getBoundingClientRect().width));
+  cv.width=Math.round(w*dpr); cv.height=Math.round(cssH*dpr);
+  const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,w,cssH);
+  return {x,W:w,H:cssH};
+}
+
+
+// CANDLES with the price EMA21 drawn over them, plus a marker showing where the last
+// open sits relative to that EMA -- the distance gate is measured from exactly there.
+function paintCandles(cv,bars,e,c,label){
+  const {x,W,H}=fitCanvas(cv,200);
+  if(!bars||!bars.length){ x.fillStyle='#64748b'; x.font='11px ui-monospace,monospace';
+    x.textAlign='center'; x.fillText('no '+label+' data',W/2,H/2); return null; }
+  const N=Math.min(W<420?Math.min(24,c.draw):c.draw, bars.length), s=bars.length-N;
+  let lo=Infinity,hi=-Infinity;
+  for(let i=s;i<bars.length;i++){ lo=Math.min(lo,bars[i].l, e[i]??bars[i].l);
+                                  hi=Math.max(hi,bars[i].h, e[i]??bars[i].h); }
+  const pad=(hi-lo)*0.08||1; lo-=pad; hi+=pad;
+  const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N, X=i=>8+i*bw+bw/2;
+  for(let i=0;i<N;i++){ const b=bars[s+i], up=b.c>=b.o;
+    x.strokeStyle=x.fillStyle=up?'#2e9e5b':'#d6504a'; x.lineWidth=1;
+    x.beginPath(); x.moveTo(X(i),Y(b.h)); x.lineTo(X(i),Y(b.l)); x.stroke();
+    const yT=Y(Math.max(b.o,b.c)), yB=Y(Math.min(b.o,b.c));
+    x.fillRect(X(i)-bw*0.3,yT,Math.max(2,bw*0.6),Math.max(1.5,yB-yT)); }
+  x.beginPath(); x.strokeStyle='#4ba3c3'; x.lineWidth=1.5; let on=false;
+  for(let i=0;i<N;i++){ const v=e[s+i]; if(v==null){on=false;continue;}
+    if(!on){x.moveTo(X(i),Y(v));on=true;} else x.lineTo(X(i),Y(v)); }
+  x.stroke();
+  // the open the distance gate reads
+  const lb=bars[bars.length-1];
+  if(lb){ x.fillStyle='#e0a458'; x.beginPath();
+    x.arc(X(N-1),Y(lb.o),2.6,0,Math.PI*2); x.fill(); }
+  return {N,s};
+}
+
+function paintRsi(cv,d,c){
+  const {x,W,H}=fitCanvas(cv,118);
+  if(!d){ x.fillStyle='#64748b'; x.font='10px ui-monospace,monospace'; x.textAlign='center';
+          x.fillText('rsi unavailable',W/2,H/2); return; }
+  const {r,w5,w11,w21,N,s}=d;
+  let lo=100,hi=0;
+  for(let i=s;i<s+N;i++) for(const v of [r[i],w5[i],w11?w11[i]:null,w21[i]])
+    if(v!=null&&isFinite(v)){ lo=Math.min(lo,v); hi=Math.max(hi,v); }
+  if(!(hi>lo)){ lo=30; hi=70; }
+  lo=Math.min(lo,38); hi=Math.max(hi,62);
+  const pad=(hi-lo)*0.08; lo-=pad; hi+=pad;
+  const Y=v=>H-8-((v-lo)/(hi-lo))*(H-16), bw=(W-16)/N, X=i=>8+i*bw+bw/2;
+
+  // fills first, so the lines sit on top
+  const band=(arrA,arrB,colFor)=>{
+    for(let i=0;i<N-1;i++){
+      const a0=arrA(s+i), a1=arrA(s+i+1), b0=arrB(s+i), b1=arrB(s+i+1);
+      if(a0==null||a1==null||b0==null||b1==null) continue;
+      const col=colFor(s+i); if(!col) continue;
+      x.fillStyle=col; x.beginPath();
+      x.moveTo(X(i),Y(a0)); x.lineTo(X(i+1),Y(a1));
+      x.lineTo(X(i+1),Y(b1)); x.lineTo(X(i),Y(b0)); x.closePath(); x.fill(); }
+  };
+  band(i=>r[i], ()=>50, i=>r[i]>50?'rgba(214,80,74,0.16)':'rgba(79,195,220,0.16)');
+  // THE FAN ALONE decides this fill: WMA5 > WMA11 > WMA21 shades light green, the
+  // reverse shades light red. Neither HM V6's RSI>50 filter nor any RSI-vs-WMA5 test
+  // applies, so the fill reports the fan's state and nothing else.
+  // This scanner carries only WMA5 and WMA21, so the fan is the two-leg test the gates
+  // use. w11 is null here; the three-leg form is kept for a pane that has a mid leg.
+  const bull=i=>w5[i]!=null&&w21[i]!=null&&w5[i]>w21[i]&&(w11==null||(w5[i]>w11[i]&&w11[i]>w21[i]));
+  const bear=i=>w5[i]!=null&&w21[i]!=null&&w5[i]<w21[i]&&(w11==null||(w5[i]<w11[i]&&w11[i]<w21[i]));
+  band(i=>r[i], i=>w5[i], i=>bull(i)?'rgba(134,239,172,0.22)':bear(i)?'rgba(248,113,113,0.22)':null);
+
+  // 40 / 50 / 60
+  // Only the 50 midline remains, thinner and fainter so it frames without competing.
+  const lvl=(v,col,dash)=>{ x.save(); x.strokeStyle=col; x.lineWidth=0.8;
+    if(dash) x.setLineDash([3,3]);
+    x.beginPath(); x.moveTo(6,Y(v)); x.lineTo(W-6,Y(v)); x.stroke(); x.restore(); };
+  lvl(50,'rgba(147,164,180,0.28)',true);
+
+  const line=(arr,col,wid)=>{ x.beginPath(); x.strokeStyle=col; x.lineWidth=wid; let on=false;
+    for(let i=0;i<N;i++){ const v=arr[s+i]; if(v==null){on=false;continue;}
+      if(!on){x.moveTo(X(i),Y(v));on=true;} else x.lineTo(X(i),Y(v)); } x.stroke(); };
+  if(w11) line(w11,'#f59e0b',1.3);   // mid -- amber, only when a mid leg exists
+  line(w5, '#86efac',1.3);     // fast -- light green
+  line(w21,'#ef4444',1.4);     // slow -- red, plain (no slope colouring)
+  // The RSI line sits UNDER everything in weight: thin and semi-transparent, so it
+  // traces the shape without drowning the three WMAs.
+  line(r,'rgba(255,255,255,0.55)',1.1);
+}
+
+
+// The panel opens as a table row directly beneath the symbol you touched, and always
+// shows BOTH timeframes side by side whichever column you tapped.
+function buildDetailRow(tb,sym,tfKey,row,c){
+  const tr=document.createElement('tr'); tr.className='detailrow';
+  const td=document.createElement('td'); td.colSpan=6; tr.appendChild(td);
+  const ev=row.ev[tfKey];
+  const mk=(label,val,pass)=>
+    `<div class="ro ${pass?'pass':'fail'}"><div class="k">${label}</div><div class="v">${val}</div></div>`;
+  const g=ev.gates;
+  td.innerHTML =
+    `<div class="dhead">${sym.replace(/\.P$/,'')} \u00b7 ${tfKey.toUpperCase()}</div>`+
+    `<div class="dsub">${ev.bars} candles \u00b7 open vs ema${c.emaLen} `+
+      `${ev.dist>=0?'+':''}${ev.dist.toFixed(2)}% \u00b7 `+
+      `${ev.sig?ev.dirLabel:ev.score+'/'+ev.total+' ('+ev.scoreSide+')'} \u00b7 `+
+      `1D bias ${row.bias===1?'bull':row.bias===-1?'bear':'flat'}</div>`+
+    `<div class="dwrap">`+
+      // The timeframe you opened leads: tap a 1D cell and the 1D chart sits first.
+      (tfKey==='1d' ? ['1d','4h'] : ['4h','1d']).map(tf=>
+        `<div class="pane"><canvas class="px" data-tf="${tf}"></canvas>`+
+        `<div class="plabel">${tf.toUpperCase()} \u00b7 <span style="color:#4ba3c3">ema${c.emaLen}</span>`+
+        ` \u00b7 <span style="color:#e0a458">last open</span></div>`+
+        `<canvas class="rs" data-tf="${tf}"></canvas>`+
+        `<div class="plabel rsil">rsi${c.rsiLen} \u00b7 wma `+
+        `<span style="color:#86efac">${c.w5}</span>/<span style="color:#ef4444">${c.w21}</span></div></div>`
+      ).join('')+
+    `</div>`+
+    `<div class="readout">`+
+      mk(`open vs ema${c.emaLen}`, `${ev.dist>=0?'+':''}${ev.dist.toFixed(2)}%`, g.dist)+
+      mk(`rsi vs wma${c.w21}`, `${ev.s.r[ev.i].toFixed(1)} / ${ev.s.w21[ev.i].toFixed(1)}`, g.rsi)+
+      mk('g21 spread gap', (ev.s.r[ev.i]-ev.s.w21[ev.i]).toFixed(2), g.gap)+
+      mk(`wma${c.w5} vs wma${c.w21}`, `${ev.s.w5[ev.i].toFixed(1)} / ${ev.s.w21[ev.i].toFixed(1)}`, g.fan)+
+      ('flip' in g ? mk('candle flip', (ev.green?'green':ev.red?'red':'doji')+' now', g.flip) : '')+
+      ('htf' in g ? mk('1D bias', row.bias===1?'bull':row.bias===-1?'bear':'flat', g.htf) : '')+
+    `</div>`;
+  tb.appendChild(tr);
+  for(const cv of td.querySelectorAll('canvas.px')){
+    const tf=cv.dataset.tf, st=store[sym+'@'+tf];
+    const bars=st?st.bars:null, ser=bars&&bars.length?series(bars,c):null;
+    const w=paintCandles(cv,bars,ser?ser.e:[],c,tf);
+    const rc=td.querySelector(`canvas.rs[data-tf="${tf}"]`);
+    paintRsi(rc, (w&&ser) ? {r:ser.r,w5:ser.w5,w11:null,w21:ser.w21,N:w.N,s:w.s} : null, c);
+  }
+}
+
+// Changing the distance cap changes only a GATE, never the data, so the tabs
+// re-evaluate from the candles already held and re-render. No network call, which is
+// why switching 2/3/5% is instant even across 24 symbols.
+function recompute(c){
+  for(const sym of c.syms){
+    const d1=store[sym+'@1d'], h4=store[sym+'@4h'];
+    if(!d1||!h4||!d1.bars.length||!h4.bars.length) continue;
+    const bias=dayBias(d1.bars,c);
+    const lastBars=h4.bars.length?h4.bars:d1.bars;
+    results[sym]={last:lastBars[lastBars.length-1].c,
+                  ev:{'4h':evaluate(h4.bars,c,'4h',bias), '1d':evaluate(d1.bars,c,'1d',bias)},
+                  bias};
+  }
+}
+
+// ---------------------------------------------------------------- alerts
+// WHAT THIS CAN AND CANNOT DO, so the behaviour is not a surprise:
+//   * It fires only while this page is OPEN and its refresh is running. A browser that
+//     has backgrounded or suspended the tab stops refreshing, so nothing fires.
+//   * Sound, banner and tab badge work everywhere, including from a local file.
+//   * The OS notification is secure-context only -- MDN: "This feature is available
+//     only in secure contexts (HTTPS)". Chrome counts a file:// page as a secure
+//     context (tested: isSecureContext === true there), so on DESKTOP it is attempted
+//     and normally works even from the local file, after the one permission prompt.
+//   * On a PHONE it will not: MDN warns "This constructor throws a TypeError when
+//     called in nearly all mobile browsers" and points to a service worker instead,
+//     which a single-file page cannot register. The throw is caught, so the phone
+//     silently falls back to sound + banner rather than showing an error.
+let alertsOn=true, actx=null, titleBase=document.title, badge=0;
+const lastSig={};              // 'SYM@tf' -> the signal seen on the previous pass
+
+function beep(n){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==='suspended') actx.resume();
+    const t0=actx.currentTime;
+    for(let i=0;i<Math.min(n,3);i++){
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.type='sine'; o.frequency.value=880;
+      const st=t0+i*0.22;
+      g.gain.setValueAtTime(0.0001,st);
+      g.gain.exponentialRampToValueAtTime(0.25,st+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,st+0.18);
+      o.connect(g); g.connect(actx.destination); o.start(st); o.stop(st+0.2);
+    }
+  }catch(e){ /* no audio device, or blocked before any gesture -- banner still shows */ }
+}
+
+// A signal is NEW when it was not the same signal on the previous pass, so a row that
+// stays LONG across refreshes alerts once rather than every minute.
+function freshSignals(c){
+  const out=[];
+  for(const sym of c.syms){
+    const r=results[sym]; if(!r) continue;
+    for(const tf of TFS){
+      const ev=r.ev[tf], key=sym+'@'+tf;
+      const now=(ev&&ev.ok)?ev.sig:0;
+      if(now!==0 && now!==lastSig[key]) out.push({sym,tf,dir:now});
+      lastSig[key]=now;
+    }
+  }
+  return out;
+}
+
+function osNotify(hits){
+  // Only attempted where it can actually work; failures are swallowed on purpose so a
+  // phone or a file:// page never shows an error for something it cannot do.
+  try{
+    if(!window.isSecureContext || !('Notification' in window)) return;
+    const fire=()=>{ try{
+      new Notification(`${hits.length} new signal${hits.length>1?'s':''}`,
+        {body:hits.map(h=>`${h.sym.replace(/\.P$/,'')} ${h.tf.toUpperCase()} ${h.dir===1?'LONG':'SHORT'}`).join('\n'),
+         tag:'delta-candlestick'});
+    }catch(e){} };
+    if(Notification.permission==='granted') fire();
+    else if(Notification.permission!=='denied') Notification.requestPermission().then(p=>{ if(p==='granted') fire(); });
+  }catch(e){}
+}
+
+function announce(hits){
+  if(!hits.length) return;
+  badge+=hits.length;
+  document.title=`(${badge}) ${titleBase}`;
+  $('alertList').innerHTML = hits.map(h=>
+    `<span class="hit" style="color:${h.dir===1?'var(--long)':'var(--short)'}">`+
+    `${h.sym.replace(/\.P$/,'')} ${h.tf.toUpperCase()} ${h.dir===1?'LONG':'SHORT'}</span>`).join('');
+  $('alertBox').style.display='block';
+  beep(hits.length);
+  osNotify(hits);
+}
+function clearBadge(){ badge=0; document.title=titleBase; $('alertBox').style.display='none'; }
+
+// ---------------------------------------------------------------- render
+let results={}, selected=null, signalsOnly=true;
+const hasSignal = sym => { const r=results[sym];
+  return !!(r && r.ev && TFS.some(tf=>r.ev[tf] && r.ev[tf].ok && r.ev[tf].sig)); };
+
+function render(c){
+  const tb=$('rows'); tb.innerHTML='';
+  const scanned=c.syms.some(s=>results[s]);
+  const nSig=c.syms.filter(hasSignal).length;
+  const show=(!scanned||!signalsOnly) ? c.syms
+    : c.syms.filter(s=>hasSignal(s)||(selected&&selected.sym===s));
+  $('btnFilter').textContent = signalsOnly ? '\u25b8 Signals only' : '\u25be Showing all';
+  $('btnFilter').classList.toggle('on', signalsOnly);
+  $('fInfo').textContent = !scanned ? 'not scanned yet'
+    : `${nSig} with a signal \u00b7 ${c.syms.length} scanned`;
+  let matched=false;
+  document.querySelectorAll('.dtab').forEach(t=>{
+    const on=+t.dataset.d===c.maxDist; t.classList.toggle('on',on); matched=matched||on; });
+  $('dNote').textContent = matched ? '' : `custom: ${c.maxDist}%`;
+  // The flip tab and the Settings dropdown are one setting with two faces, so the tab
+  // reads its state from the dropdown rather than keeping a second copy that can drift.
+  $('btnFlip').classList.toggle('on', c.mode==='signal');
+  if(scanned && signalsOnly && show.length===0){
+    const tr=document.createElement('tr'); tr.className='empty';
+    const td=document.createElement('td'); td.colSpan=6;
+    td.textContent=`No signals right now \u2014 tap to show all ${c.syms.length}`;
+    td.onclick=()=>{ signalsOnly=false; render(c); };
+    tr.appendChild(td); tb.appendChild(tr); return;
+  }
+  for(const sym of show){
+    const row=results[sym], tr=document.createElement('tr');
+    const td0=document.createElement('td'); td0.className='sym';
+    td0.textContent=sym.replace(/\.P$/,''); tr.appendChild(td0);
+    const td1=document.createElement('td'); td1.className='num';
+    td1.textContent=row&&row.last!=null?fmt(row.last):'\u2014'; tr.appendChild(td1);
+    for(const tf of TFS){
+      const td=document.createElement('td'), ev=row&&row.ev[tf];
+      const sp=document.createElement('span');
+      const sig=ev&&ev.ok?ev.sig:0;
+      sp.className='cell '+(sig===1?'l':sig===-1?'s':'n');
+      if(!ev) sp.textContent='\u2026';
+      else if(!ev.ok){ sp.textContent='\u00b7'; sp.title=`${ev.bars} candles \u2014 ${ev.why}`; }
+      else if(sig) sp.textContent=ev.dirLabel;
+      else { sp.textContent=`${ev.score}/${ev.total}`;
+        sp.title=`closest side: ${ev.scoreSide}. failing: ${ev.failed.join(', ')}`; }
+      if(selected&&selected.sym===sym&&selected.tf===tf) sp.classList.add('sel');
+      if(ev&&ev.ok) sp.onclick=()=>{
+        selected=(selected&&selected.sym===sym&&selected.tf===tf)?null:{sym,tf}; render(c); };
+      td.appendChild(sp); tr.appendChild(td);
+    }
+    const tdb=document.createElement('td');
+    const bs=document.createElement('span');
+    const bias=row?row.bias:0;
+    bs.className='cell '+(bias===1?'l':bias===-1?'s':'n');
+    bs.style.cursor='default';
+    bs.textContent=bias===1?'BULL':bias===-1?'BEAR':'\u2014';
+    tdb.appendChild(bs); tr.appendChild(tdb);
+    const td5=document.createElement('td'); td5.className='num bricks';
+    td5.textContent=row?TFS.map(tf=>row.ev[tf]?row.ev[tf].bars:'\u2013').join('/'):'\u2014';
+    tr.appendChild(td5);
+    tb.appendChild(tr);
+    if(selected && selected.sym===sym){
+      const ev=row&&row.ev[selected.tf];
+      if(ev&&ev.ok) buildDetailRow(tb,sym,selected.tf,row,c);
+    }
+  }
+}
+const fmt=v=>v>=1000?v.toFixed(1):v>=1?v.toFixed(3):v>=0.01?v.toFixed(5):v.toPrecision(4);
+
+// ---------------------------------------------------------------- scan
+let busy=false, timer=null;
+function showErr(m,raw){ $('err').style.display='block'; $('errMsg').textContent=m;
+  $('errRaw').textContent=raw||''; }
+
+async function scan(){
+  if(busy) return; busy=true; $('btnScan').disabled=true;
+  const c=cfg(); $('err').style.display='none';
+  $('hdrSub').textContent=`\u2014 ${c.syms.length} symbols \u00b7 4h / 1d`;
+  render(c);
+  let done=0, failed=0, firstErr=null;
+  for(const sym of c.syms){
+    setStatus(`fetching ${sym.replace(/\.P$/,'')} \u2026 ${done}/${c.syms.length}`,'busy');
+    try{
+      // 1D first: the 4H gate needs the Day's bias, and both columns then read the
+      // same daily series, so the bias column can never contradict the 4H cell.
+      const d1=await loadTF(sym,'1d');
+      const bias=dayBias(d1.bars,c);
+      const h4=await loadTF(sym,'4h');
+      const ev={'4h':evaluate(h4.bars,c,'4h',bias), '1d':evaluate(d1.bars,c,'1d',bias)};
+      const lastBars=h4.bars.length?h4.bars:d1.bars;
+      results[sym]={last:lastBars.length?lastBars[lastBars.length-1].c:null, ev, bias};
+    }catch(e){ failed++; if(!firstErr)firstErr=e;
+      results[sym]={last:null, ev:{'4h':null,'1d':null}, bias:0}; }
+    done++; render(c);
+  }
+  if(failed===c.syms.length){
+    setStatus('all requests failed','err');
+    showErr('Every symbol failed. If the message mentions CORS or "Failed to fetch", the '+
+            'browser blocked the call rather than Delta refusing it.', firstErr?firstErr.message:'');
+  } else {
+    setStatus(failed?`done \u2014 ${failed} symbol(s) failed`:'done', failed?'busy':'ok');
+    if(failed) showErr(`${failed} symbol(s) failed. Others are live.`, firstErr?firstErr.message:'');
+  }
+  const hits=freshSignals(c);
+  if(alertsOn) announce(hits); 
+  $('clock').textContent='last: '+new Date().toLocaleTimeString();
+  busy=false; $('btnScan').disabled=false;
+}
+$('btnFilter').onclick=()=>{ signalsOnly=!signalsOnly; render(cfg()); };
+document.querySelectorAll('.dtab').forEach(t=>{
+  t.onclick=()=>{ $('cfgDist').value=t.dataset.d; const c=cfg(); recompute(c); render(c); };
+});
+$('alertX').onclick=clearBadge;
+$('btnAlert').onclick=()=>{
+  alertsOn=!alertsOn;
+  $('btnAlert').classList.toggle('on',alertsOn);
+  if(!alertsOn) clearBadge();
+  // Unlock audio on the gesture that turned alerts on: browsers refuse to play sound
+  // until the page has been interacted with, and a scan triggered by the auto-timer
+  // is not an interaction.
+  else beep(0) || (()=>{ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    actx.resume(); }catch(e){} })();
+};
+$('btnFlip').onclick=()=>{
+  $('cfgMode').value = cfg().mode==='signal' ? 'bias' : 'signal';
+  const c=cfg(); recompute(c); render(c);
+};
+$('btnScan').onclick=scan;
+$('btnAuto').onclick=()=>{ if(timer){clearInterval(timer);timer=null;$('btnAuto').textContent='Auto: off';}
+  else{ const s=Math.max(60,cfg().every); timer=setInterval(scan,s*1000);
+        $('btnAuto').textContent=`Auto: ${s}s`; scan(); } };
+render(cfg());
+setStatus('ready \u2014 press Scan now');
+</script>
+</body>
+</html>
