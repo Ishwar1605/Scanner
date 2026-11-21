@@ -65,11 +65,17 @@ input,textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid 
 textarea{min-height:64px;resize:vertical;grid-column:1/-1}
 table{width:100%;border-collapse:collapse;background:var(--panel);
       border:1px solid var(--line);border-radius:8px;overflow:hidden}
-th,td{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line);font-size:12.5px}
+/* Fixed layout so the columns share the width evenly instead of the browser handing
+   the slack to whichever column it likes; everything centred but the symbol. */
+table{table-layout:fixed}
+th:first-child{width:26%}
+th,td{padding:5px 6px;text-align:center;border-bottom:1px solid var(--line);font-size:12.5px}
 th{background:var(--panel2);color:var(--dim);font-weight:500;font-size:11px;
    text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;z-index:2}
-td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap}
-td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);text-align:right;
+td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap;text-align:left;
+       overflow:hidden;text-overflow:ellipsis}
+th:first-child{text-align:left}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);
        white-space:nowrap}
 /* The bricks column was wrapping "159 / 78 / 36" onto three lines, which made EVERY row
    three lines tall on a phone. nowrap plus a smaller face is most of the compaction. */
@@ -170,7 +176,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
 
 <table>
   <thead><tr>
-    <th>Symbol</th><th>Last</th><th>4H</th><th>1D</th><th>1D bias</th><th>Bars</th>
+    <th>Symbol</th><th>Day %</th><th>4H</th><th>1D</th><th>1D bias</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
@@ -390,6 +396,27 @@ function fitCanvas(cv,cssH){
 
 // CANDLES with the price EMA21 drawn over them, plus a marker showing where the last
 // open sits relative to that EMA -- the distance gate is measured from exactly there.
+// CROSSHAIR. Pointer and touch both report into cv._hover; the pane is simply redrawn
+// on every move, which at 24-40 candles is far cheaper than keeping an overlay layer
+// in sync. Leaving the chart clears it and the readout falls back to the newest candle.
+function attachCrosshair(cv, repaint){
+  if(cv._xh) return; cv._xh=true;
+  const at=ev=>{
+    const r=cv.getBoundingClientRect();
+    const t=ev.touches && ev.touches[0];
+    cv._hover={x:(t?t.clientX:ev.clientX)-r.left, y:(t?t.clientY:ev.clientY)-r.top};
+    repaint();
+  };
+  const off=()=>{ cv._hover=null; repaint(); };
+  cv.addEventListener('pointerdown',at);
+  cv.addEventListener('pointermove',e=>{ if(e.pointerType!=='touch') at(e); });
+  cv.addEventListener('pointerleave',off);
+  // preventDefault stops the page scrolling while you drag along the candles
+  cv.addEventListener('touchstart',e=>{ e.preventDefault(); at(e); },{passive:false});
+  cv.addEventListener('touchmove', e=>{ e.preventDefault(); at(e); },{passive:false});
+  cv.addEventListener('touchend',off);
+}
+
 // livePx, when given, overrides the LAST candle's close for drawing only -- the stored
 // bar is untouched, so nothing that feeds the gates sees a half-formed price.
 function paintCandles(cv,bars,e,c,label,livePx){
@@ -405,6 +432,7 @@ function paintCandles(cv,bars,e,c,label,livePx){
   for(let i=s;i<bars.length;i++){ const b=at(i);
     lo=Math.min(lo,b.l, e[i]??b.l); hi=Math.max(hi,b.h, e[i]??b.h); }
   const pad=(hi-lo)*0.08||1; lo-=pad; hi+=pad;
+  const hi1=hi;                       // kept for the crosshair's price readout
   const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N, X=i=>8+i*bw+bw/2;
   for(let i=0;i<N;i++){ const b=at(s+i), up=b.c>=b.o;
     x.strokeStyle=x.fillStyle=up?'#2e9e5b':'#d6504a'; x.lineWidth=1;
@@ -419,6 +447,36 @@ function paintCandles(cv,bars,e,c,label,livePx){
   const lb=bars[bars.length-1];
   if(lb){ x.fillStyle='#e0a458'; x.beginPath();
     x.arc(X(N-1),Y(lb.o),2.6,0,Math.PI*2); x.fill(); }
+
+  // ---- crosshair and the candle readout ----
+  const hv=cv._hover;
+  let hx=null;
+  if(hv){ hx=Math.max(0, Math.min(N-1, Math.round((hv.x-8-bw/2)/bw))); }
+  if(hv){
+    x.save(); x.strokeStyle='rgba(147,164,180,0.55)'; x.lineWidth=0.8; x.setLineDash([3,3]);
+    x.beginPath(); x.moveTo(X(hx),6); x.lineTo(X(hx),H-6); x.stroke();
+    const yy=Math.max(6,Math.min(H-6,hv.y));
+    x.beginPath(); x.moveTo(8,yy); x.lineTo(W-8,yy); x.stroke();
+    x.restore();
+    // price at the cursor, on the right edge
+    const pv = lo + (H-12-yy)/(H-26)*(hi1-lo);
+    if(isFinite(pv)){
+      const t=fmt(pv); x.font='10px ui-monospace,monospace'; x.textAlign='right';
+      const w=x.measureText(t).width+6;
+      x.fillStyle='rgba(20,28,36,0.9)'; x.fillRect(W-8-w,yy-7,w,14);
+      x.fillStyle='#93a4b4'; x.fillText(t, W-11, yy+3.5);
+    }
+  }
+  // the readout: hovered candle, or the newest one when not hovering
+  const ri = hx!=null ? hx : N-1;
+  const rb = at(s+ri);
+  if(rb && rb.o){
+    const chg=(rb.c-rb.o)/rb.o*100;
+    const txt=`${fmt(rb.c)}  ${chg>=0?'+':''}${chg.toFixed(2)}%`;
+    x.font='bold 11px ui-monospace,monospace'; x.textAlign='right';
+    x.fillStyle = chg>=0 ? '#2e9e5b' : '#d6504a';
+    x.fillText(txt, W-10, 14);
+  }
   return {N,s};
 }
 
@@ -478,7 +536,7 @@ function paintRsi(cv,d,c){
 // shows BOTH timeframes side by side whichever column you tapped.
 function buildDetailRow(tb,sym,tfKey,row,c){
   const tr=document.createElement('tr'); tr.className='detailrow';
-  const td=document.createElement('td'); td.colSpan=6; tr.appendChild(td);
+  const td=document.createElement('td'); td.colSpan=5; tr.appendChild(td);
   const ev=row.ev[tfKey];
   const mk=(label,val,pass)=>
     `<div class="ro ${pass?'pass':'fail'}"><div class="k">${label}</div><div class="v">${val}</div></div>`;
@@ -517,6 +575,7 @@ function buildDetailRow(tb,sym,tfKey,row,c){
       const tf=cv.dataset.tf, st=store[sym+'@'+tf];
       const bars=st?st.bars:null, ser=bars&&bars.length?series(bars,c):null;
       const w=paintCandles(cv,bars,ser?ser.e:[],c,tf,live[sym.replace(/\.P$/,'')]);
+      attachCrosshair(cv, draw);
       const rc=td.querySelector(`canvas.rs[data-tf="${tf}"]`);
       paintRsi(rc, (w&&ser) ? {r:ser.r,w5:ser.w5,w11:null,w21:ser.w21,N:w.N,s:w.s} : null, c);
     }
@@ -577,16 +636,28 @@ async function pollLive(){
   }catch(e){ $('liveClock').textContent='live feed unreachable'; }
 }
 
+// DAY CHANGE comes from the daily candle this page already holds -- today's open
+// against the live price -- rather than a separate field from the exchange. That way
+// the number always agrees with the 1D chart beside it, costs no extra request, and
+// moves with the live feed.
+function dayChange(sym){
+  const d1=store[sym+'@1d'];
+  if(!d1||!d1.bars.length) return null;
+  const b=d1.bars[d1.bars.length-1];
+  const px=live[sym.replace(/\.P$/,'')] ?? b.c;
+  if(!b.o || !isFinite(px)) return null;
+  return (px-b.o)/b.o*100;
+}
+function paintDayChg(td){
+  const v=dayChange(td.dataset.chg);
+  td.textContent = v==null ? '\u2014' : (v>=0?'+':'')+v.toFixed(2)+'%';
+  td.style.color = v==null ? '' : (v>=0?'var(--long)':'var(--short)');
+}
+
 // Cells are written in place rather than re-rendering the table, so an open chart
 // panel does not close under you every few seconds.
 function paintLive(){
-  document.querySelectorAll('td[data-last]').forEach(td=>{
-    const sym=td.dataset.last, px=live[sym];
-    if(px==null) return;
-    td.textContent=fmt(px);
-    const was=livePrev[sym];
-    td.style.color = (was==null||px===was) ? '' : (px>was?'var(--long)':'var(--short)');
-  });
+  document.querySelectorAll('td[data-chg]').forEach(paintDayChg);
   if(redrawOpenDetail) redrawOpenDetail();
 }
 
@@ -699,7 +770,7 @@ function render(c){
   $('btnFlip').classList.toggle('on', c.mode==='signal');
   if(scanned && signalsOnly && show.length===0){
     const tr=document.createElement('tr'); tr.className='empty';
-    const td=document.createElement('td'); td.colSpan=6;
+    const td=document.createElement('td'); td.colSpan=5;
     td.textContent=`No signals right now \u2014 tap to show all ${c.syms.length}`;
     td.onclick=()=>{ signalsOnly=false; render(c); };
     tr.appendChild(td); tb.appendChild(tr); return;
@@ -708,7 +779,7 @@ function render(c){
   for(const sym of show){
     if(!dividerDone && c.syms.indexOf(sym) >= nPinned){
       const dr=document.createElement('tr'); dr.className='divider';
-      const dtd=document.createElement('td'); dtd.colSpan=6;
+      const dtd=document.createElement('td'); dtd.colSpan=5;
       dtd.textContent=`all other symbols \u00b7 alphabetical`;
       dr.appendChild(dtd); tb.appendChild(dr); dividerDone=true;
     }
@@ -716,9 +787,8 @@ function render(c){
     const td0=document.createElement('td'); td0.className='sym';
     td0.textContent=sym.replace(/\.P$/,''); tr.appendChild(td0);
     const td1=document.createElement('td'); td1.className='num';
-    td1.dataset.last=sym.replace(/\.P$/,'');
-    const lp=live[td1.dataset.last];
-    td1.textContent = lp!=null ? fmt(lp) : (row&&row.last!=null?fmt(row.last):'\u2014');
+    td1.dataset.chg=sym;
+    paintDayChg(td1);
     tr.appendChild(td1);
     for(const tf of TFS){
       const td=document.createElement('td'), ev=row&&row.ev[tf];
@@ -742,9 +812,6 @@ function render(c){
     bs.style.cursor='default';
     bs.textContent=bias===1?'BULL':bias===-1?'BEAR':'\u2014';
     tdb.appendChild(bs); tr.appendChild(tdb);
-    const td5=document.createElement('td'); td5.className='num bricks';
-    td5.textContent=row?TFS.map(tf=>row.ev[tf]?row.ev[tf].bars:'\u2013').join('/'):'\u2014';
-    tr.appendChild(td5);
     tb.appendChild(tr);
     if(selected && selected.sym===sym){
       const ev=row&&row.ev[selected.tf];
