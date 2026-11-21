@@ -58,11 +58,15 @@ input,textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid 
 textarea{min-height:64px;resize:vertical;grid-column:1/-1}
 table{width:100%;border-collapse:collapse;background:var(--panel);
       border:1px solid var(--line);border-radius:8px;overflow:hidden}
-th,td{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line);font-size:12.5px}
+table{table-layout:fixed}
+th:first-child{width:22%}
+th,td{padding:5px 6px;text-align:center;border-bottom:1px solid var(--line);font-size:12.5px}
 th{background:var(--panel2);color:var(--dim);font-weight:500;font-size:11px;
    text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;z-index:2}
-td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap}
-td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);text-align:right;
+td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap;text-align:left;
+       overflow:hidden;text-overflow:ellipsis}
+th:first-child{text-align:left}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);
        white-space:nowrap}
 /* The bricks column was wrapping "159 / 78 / 36" onto three lines, which made EVERY row
    three lines tall on a phone. nowrap plus a smaller face is most of the compaction. */
