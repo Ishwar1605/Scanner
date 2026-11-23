@@ -37,6 +37,8 @@ button:disabled{opacity:.5;cursor:default}
 .dtab.on{border-color:var(--accent);color:var(--accent);background:#10212a}
 .ftab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
 .ftab.on{border-color:var(--long);color:var(--long);background:var(--long-bg)}
+.e21tab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
+.e21tab.on{border-color:#c489d8;color:#c489d8;background:#241a2b}
 .atab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
 .atab.on{border-color:var(--warn);color:var(--warn);background:#2a2113}
 .ltab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
@@ -169,6 +171,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   <button class="dtab" data-d="5">5%</button>
   <button id="btnLive" class="ltab on" title="Poll every symbol's current price in a single request and update the Last column and the open chart's forming candle. Gates are NOT re-evaluated - press Scan or leave Auto on for those.">live</button>
   <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT that was not signalling on the previous pass. Only fires while this page is open and running.">alerts</button>
+  <button id="btnE21" class="e21tab" title="Keep only symbols whose 1D EMA21 agrees with their signal: a LONG must be trading above its daily EMA21, a SHORT below it. Uses the live price when the feed is on, otherwise the daily close. A symbol whose 1D EMA21 cannot be computed yet is hidden while this is on.">ema21</button>
   <button id="btnFlip" class="ftab on" title="Require a candle colour FLIP - green after red for a long, red after green for a short - so a symbol fires on the turn rather than on every candle of a run. Off reports the gate state only, and each cell then scores out of one less.">flip</button>
   <span id="dNote"></span>
   <span id="liveClock"></span>
@@ -193,6 +196,8 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   The 4H column adds the 1D bias, so 4H scores out of one more than 1D.
   <br><b>The last candle is still forming</b>, so a 4H or 1D cell can change before that candle closes &mdash;
   the colour flip especially. This matches how your TradingView screener reads the live bar.
+  <br><b>ema21</b> \u2014 keeps only symbols whose 1D EMA21 agrees with the signal: a LONG above its
+  daily EMA21, a SHORT below it.
   <br>Data: Delta Exchange India public API, fetched by this browser.
 </footer>
 </div>
@@ -747,20 +752,55 @@ function announce(hits){
 function clearBadge(){ badge=0; document.title=titleBase; $('alertBox').style.display='none'; }
 
 // ---------------------------------------------------------------- render
-let results={}, selected=null, signalsOnly=true;
+let results={}, selected=null, signalsOnly=true, e21Only=false;
 const hasSignal = sym => { const r=results[sym];
   return !!(r && r.ev && TFS.some(tf=>r.ev[tf] && r.ev[tf].ok && r.ev[tf].sig)); };
+
+// SIDE OF THE 1D EMA21. Read off the daily series the scan already built, with the
+// live price substituted for the close when the feed is running, so this agrees with
+// the Day % column beside it. null when the daily EMA21 is not computable yet -- a
+// newly listed symbol -- and null is treated as "hide", because "I don't know" is not
+// an answer.
+function above1dEma(sym){
+  const r=results[sym]; if(!r||!r.ev) return null;
+  const ev=r.ev['1d']; if(!ev||!ev.ok||!ev.s) return null;
+  const e=ev.s.e[ev.i]; if(e==null||!isFinite(e)) return null;
+  const px=live[sym.replace(/\.P$/,'')] ?? ev.s.cl[ev.i];
+  return isFinite(px) ? px>e : null;
+}
+
+// DIRECTION-AWARE. A long has to be ABOVE its daily EMA21, a short BELOW it, so the
+// filter keeps what agrees with the daily trend on both sides rather than only longs.
+//   signalling BOTH ways (4H long, 1D short) -> kept, since neither side is wrong
+//   NO signal (only reachable with Signals only off) -> judged on the side the 1D
+//   cell is closest to, so the filter still means something in that view
+function emaAligned(sym){
+  const a=above1dEma(sym); if(a===null) return false;
+  const r=results[sym]; if(!r||!r.ev) return false;
+  let L=false,S=false;
+  for(const tf of TFS){ const e=r.ev[tf]; if(e&&e.ok){ if(e.sig===1)L=true; if(e.sig===-1)S=true; } }
+  if(L&&S) return true;
+  if(L) return a;
+  if(S) return !a;
+  const d=r.ev['1d'];
+  return (d&&d.ok&&d.scoreSide==='short') ? !a : a;
+}
 
 function render(c){
   const tb=$('rows'); tb.innerHTML='';
   const scanned=c.syms.some(s=>results[s]);
   const nSig=c.syms.filter(hasSignal).length;
-  const show=(!scanned||!signalsOnly) ? c.syms
-    : c.syms.filter(s=>hasSignal(s)||(selected&&selected.sym===s));
+  // Signals filter first, then the EMA21 filter on top. A symbol you have OPEN is
+  // kept visible through both, so the chart panel never vanishes under your finger.
+  const base=(!scanned||!signalsOnly) ? c.syms : c.syms.filter(hasSignal);
+  const show=!e21Only ? base
+    : base.filter(s=>emaAligned(s) || (selected&&selected.sym===s));
   $('btnFilter').textContent = signalsOnly ? '\u25b8 Signals only' : '\u25be Showing all';
   $('btnFilter').classList.toggle('on', signalsOnly);
+  $('btnE21').classList.toggle('on', e21Only);
   $('fInfo').textContent = !scanned ? 'not scanned yet'
-    : `${nSig} with a signal \u00b7 ${c.syms.length} scanned`;
+    : `${nSig} with a signal \u00b7 ${c.syms.length} scanned`
+      + (e21Only ? ` \u00b7 ${show.length} aligned with 1D ema21` : '');
   let matched=false;
   document.querySelectorAll('.dtab').forEach(t=>{
     const on=+t.dataset.d===c.maxDist; t.classList.toggle('on',on); matched=matched||on; });
@@ -768,11 +808,13 @@ function render(c){
   // The flip tab and the Settings dropdown are one setting with two faces, so the tab
   // reads its state from the dropdown rather than keeping a second copy that can drift.
   $('btnFlip').classList.toggle('on', c.mode==='signal');
-  if(scanned && signalsOnly && show.length===0){
+  if(scanned && show.length===0 && (signalsOnly||e21Only)){
     const tr=document.createElement('tr'); tr.className='empty';
     const td=document.createElement('td'); td.colSpan=5;
-    td.textContent=`No signals right now \u2014 tap to show all ${c.syms.length}`;
-    td.onclick=()=>{ signalsOnly=false; render(c); };
+    td.textContent = e21Only
+      ? `Nothing aligned with its 1D ema21 right now \u2014 tap to clear that filter`
+      : `No signals right now \u2014 tap to show all ${c.syms.length}`;
+    td.onclick=()=>{ if(e21Only) e21Only=false; else signalsOnly=false; render(c); };
     tr.appendChild(td); tb.appendChild(tr); return;
   }
   let dividerDone = signalsOnly;   // with the filter on, order is all that matters
@@ -905,6 +947,7 @@ $('btnAlert').onclick=()=>{
   else beep(0) || (()=>{ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)();
     actx.resume(); }catch(e){} })();
 };
+$('btnE21').onclick=()=>{ e21Only=!e21Only; render(cfg()); };
 $('btnFlip').onclick=()=>{
   $('cfgMode').value = cfg().mode==='signal' ? 'bias' : 'signal';
   const c=cfg(); recompute(c); render(c);
