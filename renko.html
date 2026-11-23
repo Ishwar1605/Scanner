@@ -35,6 +35,10 @@ button:disabled{opacity:.5;cursor:default}
 #btnFilter.on{border-color:var(--accent);color:var(--accent)}
 .ltab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
 .ltab.on{border-color:var(--accent);color:var(--accent);background:#10212a}
+.e9tab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
+.e9tab.on{border-color:#c489d8;color:#c489d8;background:#241a2b}
+/* A cell whose ema9 setup has fired but which has no full LONG/SHORT yet. */
+.cell.e9{background:#3b2430;color:#f8b4d9;border-color:#7a4560}
 .atab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
 .atab.on{border-color:var(--warn);color:var(--warn);background:#2a2113}
 #alertBox{display:none;background:#10212a;border:1px solid var(--accent);border-radius:8px;
@@ -92,6 +96,13 @@ tr.detailrow>td{background:var(--panel2);padding:10px 8px;border-bottom:2px soli
 canvas{width:100%;height:200px;background:var(--bg);border:1px solid var(--line);
        border-radius:6px;display:block}
 canvas.cvRr,canvas.cv4r{height:118px;margin-top:5px}
+/* Desktop gets 25% more vertical room so the EMA slopes read properly. Phones keep
+   the compact sizes -- 250px of chart would push the readout tiles off a phone screen.
+   The painters measure the canvas, so these two rules are the only place heights live. */
+@media(min-width:701px){
+  canvas{height:250px}
+  canvas.cvRr,canvas.cv4r{height:148px}
+}
 .plabel.rsil{top:auto;bottom:4px}
 .readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:7px;margin-top:10px}
 .ro{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:6px 8px}
@@ -138,6 +149,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
     <div><label>Max history (days)</label><input id="cfgMaxDays" type="number" value="27" min="1" max="60" title="The scanner deepens on its own, up to this, until every brick size has enough bricks."></div>
     <div><label>Brick sizes (%)</label><input id="cfgBricks" value="0.75, 1.0, 1.5"></div>
     <div><label>EMA length</label><input id="cfgEma" type="number" value="21"></div>
+    <div><label>Fast EMA (ema9 switch)</label><input id="cfgEma9" type="number" value="9" title="The fast EMA used by the ema9 switch and drawn on the renko pane. Not read by any of the six gates."></div>
     <div><label>EMA velocity lookback (bricks)</label><input id="cfgVeloLen" type="number" value="10"></div>
     <div><label>Min EMA velocity %</label><input id="cfgVelo" type="number" step="0.1" value="1.0"></div>
     <div><label>RSI length</label><input id="cfgRsi" type="number" value="21"></div>
@@ -161,6 +173,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   <button id="btnFilter" class="on">▸ Signals only</button>
   <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT at a brick size that was not signalling on the previous scan. Only fires while this page is open and scanning.">alerts</button>
   <button id="btnLive" class="ltab on" title="Poll every symbol's current price in one request and update the Last column and the 4h chart's forming candle. The renko bricks are NOT redrawn - a brick only exists once price has moved a full brick - and the gates are not re-scored.">live</button>
+  <button id="btnE9" class="e9tab" title="Keep only symbols where the ema9 setup has fired: fast EMA above the slow one, the previous brick closed below the fast EMA and this one closed above it, and the brick colour flipped. Mirrored for shorts. Independent of the six gates - with Signals only also on, a row must satisfy both.">ema9</button>
   <span id="liveClock"></span>
   <span id="fInfo"></span>
 </div>
@@ -205,7 +218,8 @@ const $ = id => document.getElementById(id);
 const cfg = () => ({
   res:$('cfgRes').value.trim(), days:+$('cfgDays').value,
   bricks:$('cfgBricks').value.split(',').map(s=>parseFloat(s)).filter(x=>x>0),
-  emaLen:+$('cfgEma').value, veloLen:+$('cfgVeloLen').value, veloMin:+$('cfgVelo').value,
+  emaLen:+$('cfgEma').value, emaFast:+$('cfgEma9').value,
+  veloLen:+$('cfgVeloLen').value, veloMin:+$('cfgVelo').value,
   rsiLen:+$('cfgRsi').value, w5:+$('cfgW5').value, w11:+$('cfgW11').value, w21:+$('cfgW21').value,
   wick:$('cfgWick').value==='on',
   stP:+$('cfgStP').value, stF:+$('cfgStF').value, every:+$('cfgEvery').value,
@@ -534,6 +548,7 @@ function evaluate(bars,pct,c,sym){
   const cl=b.map(x=>x.c);
   const r=rsi(cl,c.rsiLen), w5=wma(r,c.w5), w21=wma(r,c.w21), e=ema(cl,c.emaLen);
   const w11=wma(r,c.w11);          // display only -- the signal gates do not read it
+  const e9=ema(cl,c.emaFast);      // fast EMA for the ema9 switch, not a gate
   const {dirs,line}=supertrend(b,c.stF,c.stP);
   const i=b.length-1, ePrev=e[i-c.veloLen];
   const velo=(ePrev&&ePrev!==0)?(e[i]-ePrev)/ePrev*100:0;
@@ -555,10 +570,19 @@ function evaluate(bars,pct,c,sym){
   // Near-miss score. With no hits on screen there is nothing to check the maths against,
   // so every evaluated cell reports how many conditions passed on its stronger side and
   // names the ones that failed. That makes a quiet screen verifiable instead of opaque.
+  // ---- THE ema9 SETUP, independent of the six gates above ----
+  // Long needs all three: the fast EMA above the slow one, the PREVIOUS brick closed
+  // BELOW the fast EMA and this one closed ABOVE it, and the brick colour flipped.
+  // Each close is compared against the fast EMA AT ITS OWN BRICK, not against today's
+  // value, so the cross is a real cross and not an artefact of the EMA having moved.
+  const e9ready = e9[i]!=null && e9[i-1]!=null && e[i]!=null;
+  const e9L = e9ready && e9[i]>e[i] && cl[i-1]<e9[i-1] && cl[i]>e9[i] && flipL;
+  const e9S = e9ready && e9[i]<e[i] && cl[i-1]>e9[i-1] && cl[i]<e9[i] && flipS;
+
   const nL=Object.values(g).filter(Boolean).length, nS=Object.values(gs).filter(Boolean).length;
   const side = nL>=nS ? g : gs, sideN = Math.max(nL,nS), total=Object.keys(g).length;
   const failed = Object.keys(side).filter(k=>!side[k]);
-  return {ok:true,bricks:b.length,tick:tk,ovUsed:ov>0,b,cl,r,w5,w11,w21,e,dirs,line,i,velo,needFlip,total,
+  return {ok:true,bricks:b.length,tick:tk,ovUsed:ov>0,b,cl,r,w5,w11,w21,e,e9,e9L,e9S,dirs,line,i,velo,needFlip,total,
           size: b.length?Math.abs(b[i].c-b[i].o):0, score:sideN, failed,
           scoreSide: nL>=nS?'long':'short',
           sig: long?1:short?-1:0, gates: long?g:short?gs:g, dirLabel: long?'LONG':short?'SHORT':'—'};
@@ -686,12 +710,17 @@ function setLive(on){
 }
 
 // ---------------------------------------------------------------- render
-let results={}, selected=null, signalsOnly=true;
+let results={}, selected=null, signalsOnly=true, e9Only=false;
 
 // A symbol "has a signal" if ANY of its brick sizes fired LONG or SHORT. Near-miss
 // scores (4/6) are not signals and stay hidden while the filter is on.
 const hasSignal = sym => { const r=results[sym];
   return !!(r && r.ev && r.ev.some(e=>e&&e.ok&&e.sig)); };
+
+// The ema9 setup on ANY brick size qualifies the row; the per-cell colour then shows
+// which size it was.
+const hasE9 = sym => { const r=results[sym];
+  return !!(r && r.ev && r.ev.some(e=>e&&e.ok&&(e.e9L||e.e9S))); };
 
 function render(c){
   const tb=$('rows'); tb.innerHTML='';
@@ -702,20 +731,29 @@ function render(c){
   // detail panel never vanishes from under your finger when a signal clears.
   const scanned = c.syms.some(s=>results[s]);
   const nSig = c.syms.filter(hasSignal).length;
-  const show = (!scanned || !signalsOnly)
+  // Signals filter first, then the ema9 filter stacked on top. A symbol you have OPEN
+  // survives both, so the chart panel never vanishes from under your finger.
+  const nE9 = c.syms.filter(hasE9).length;
+  const base = (!scanned || !signalsOnly)
       ? c.syms
       : c.syms.filter(s=>hasSignal(s) || (selected&&selected.sym===s));
+  const show = !e9Only ? base
+      : base.filter(s=>hasE9(s) || (selected&&selected.sym===s));
 
   $('btnFilter').textContent = signalsOnly ? '\u25b8 Signals only' : '\u25be Showing all';
   $('btnFilter').classList.toggle('on', signalsOnly);
+  $('btnE9').classList.toggle('on', e9Only);
   $('fInfo').textContent = !scanned ? 'not scanned yet'
-      : `${nSig} with a signal \u00b7 ${c.syms.length} scanned`;
+      : `${nSig} with a signal \u00b7 ${c.syms.length} scanned`
+        + (e9Only ? ` \u00b7 ${nE9} with the ema9 setup` : '');
 
-  if(scanned && signalsOnly && show.length===0){
+  if(scanned && show.length===0 && (signalsOnly||e9Only)){
     const tr=document.createElement('tr'); tr.className='empty';
     const td=document.createElement('td'); td.colSpan=3+c.bricks.length;
-    td.textContent=`No signals right now \u2014 tap to show all ${c.syms.length}`;
-    td.onclick=()=>{ signalsOnly=false; render(c); };
+    td.textContent = e9Only
+      ? `Nothing with the ema9 setup right now \u2014 tap to clear that filter`
+      : `No signals right now \u2014 tap to show all ${c.syms.length}`;
+    td.onclick=()=>{ if(e9Only) e9Only=false; else signalsOnly=false; render(c); };
     tr.appendChild(td); tb.appendChild(tr); return;
   }
 
@@ -732,13 +770,17 @@ function render(c){
       const td=document.createElement('td'); const ev=row&&row.ev[k];
       const sp=document.createElement('span');
       const sig=ev&&ev.ok?ev.sig:0;
-      sp.className='cell '+(sig===1?'l':sig===-1?'s':'n');
+      // A full signal keeps its green/red. Otherwise, a fired ema9 setup turns the
+      // score pink so you can see which size triggered it without opening the row.
+      const e9hit = !!(ev && ev.ok && (ev.e9L || ev.e9S));
+      sp.className='cell '+(sig===1?'l':sig===-1?'s':(e9hit?'e9':'n'));
       if(!ev) sp.textContent='…';
       else if(!ev.ok){ sp.textContent='·';
         sp.title=`only ${ev.bricks} bricks — ${ev.why}. Already deepened to the max history.`; }
       else if(sig) sp.textContent=ev.dirLabel;
       else { sp.textContent=`${ev.score}/${ev.total}`;
-        sp.title=`closest side: ${ev.scoreSide}. failing: ${ev.failed.join(', ')}`; }
+        sp.title=`closest side: ${ev.scoreSide}. failing: ${ev.failed.join(', ')}`
+          + (e9hit ? `\nema9 setup: ${ev.e9L?'LONG':'SHORT'}` : ''); }
       if(selected&&selected.sym===sym&&selected.k===k) sp.classList.add('sel');
       // Touching the selected cell again closes the panel.
       if(ev&&ev.ok){ sp.onclick=()=>{
@@ -759,13 +801,18 @@ const fmt=v=>v>=1000?v.toFixed(1):v>=1?v.toFixed(3):v>=0.01?v.toFixed(5):v.toPre
 // ---------------------------------------------------------------- detail panel
 // Sized to its real CSS width and to the device pixel ratio, so the canvas is sharp on
 // a phone instead of a fixed 1100px bitmap squeezed into 340.
+// cssH is only a fallback for the first paint, before layout has settled. The real
+// height comes from the element itself, so the CSS above (including its desktop media
+// query) is the single source of truth and no painter needs to know a pixel count.
 function fitCanvas(cv,cssH){
   const dpr=window.devicePixelRatio||1;
-  const w=Math.max(160,Math.round(cv.getBoundingClientRect().width));
-  cv.width=Math.round(w*dpr); cv.height=Math.round(cssH*dpr);
+  const r=cv.getBoundingClientRect();
+  const w=Math.max(160,Math.round(r.width));
+  const h=Math.max(80,Math.round(r.height||cssH));
+  cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
   const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0);
-  x.clearRect(0,0,w,cssH);
-  return {x,W:w,H:cssH};
+  x.clearRect(0,0,w,h);
+  return {x,W:w,H:h};
 }
 
 // RENKO PANE. EMA21 is stroked segment by segment and coloured by the EMA VELOCITY at
@@ -776,8 +823,8 @@ function paintRenko(cv,ev,c){
   const {x,W,H}=fitCanvas(cv,200);
   const N=Math.min(W<420?26:46,ev.b.length), s=ev.b.length-N, view=ev.b.slice(s);
   let lo=Infinity,hi=-Infinity;
-  for(let i=s;i<ev.b.length;i++){ lo=Math.min(lo,ev.b[i].l, ev.line[i]??ev.b[i].l, ev.e[i]??ev.b[i].l);
-                                  hi=Math.max(hi,ev.b[i].h, ev.line[i]??ev.b[i].h, ev.e[i]??ev.b[i].h); }
+  for(let i=s;i<ev.b.length;i++){ lo=Math.min(lo,ev.b[i].l, ev.line[i]??ev.b[i].l, ev.e[i]??ev.b[i].l, ev.e9?.[i]??ev.b[i].l);
+                                  hi=Math.max(hi,ev.b[i].h, ev.line[i]??ev.b[i].h, ev.e[i]??ev.b[i].h, ev.e9?.[i]??ev.b[i].h); }
   const pad=(hi-lo)*0.08||1; lo-=pad; hi+=pad;
   const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N;
   for(let i=0;i<N;i++){ const b=view[i], x0=8+i*bw+bw*0.14, w=bw*0.72;
@@ -807,6 +854,15 @@ function paintRenko(cv,ev,c){
     x.beginPath();
     x.strokeStyle = veloAt(s+i)>=c.veloMin ? '#d6504a' : '#8b98a6';
     x.moveTo(8+(i-1)*bw+bw/2,Y(p)); x.lineTo(8+i*bw+bw/2,Y(q)); x.stroke(); }
+  // The fast EMA, one flat violet line. It belongs to the ema9 switch, not to the gates,
+  // so it is deliberately a single colour -- nothing about it should read as a signal.
+  if(ev.e9){
+    x.beginPath(); x.strokeStyle='#c489d8'; x.lineWidth=1.5; let on=false;
+    for(let i=0;i<N;i++){ const v=ev.e9[s+i]; if(v==null){ on=false; continue; }
+      const px=8+i*bw+bw/2, py=Y(v);
+      if(!on){ x.moveTo(px,py); on=true; } else x.lineTo(px,py); }
+    x.stroke();
+  }
   return {N,s};
 }
 
@@ -918,7 +974,10 @@ function buildDetailRow(tb,sym,pct,ev,c){
       `<div class="pane"><canvas class="cvR"></canvas>`+
         `<div class="plabel">renko · ST <span style="color:#16a34a">up</span>/`+
         `<span style="color:#dc2626">down</span> · ema${c.emaLen} `+
-        `<span style="color:#d6504a">red</span> = velocity ≥ ${c.veloMin}%</div>`+
+        `<span style="color:#d6504a">red</span> = velocity ≥ ${c.veloMin}% · `+
+        `<span style="color:#c489d8">ema${c.emaFast}</span>`+
+        (ev.e9L||ev.e9S ? ` · <span style="color:#f8b4d9">ema9 setup: ${ev.e9L?'LONG':'SHORT'}</span>` : '')+
+        `</div>`+
         `<canvas class="cvRr"></canvas>`+
         `<div class="plabel rsil">rsi${c.rsiLen} · wma `+
         `<span style="color:#86efac">${c.w5}</span>/<span style="color:#f59e0b">${c.w11}</span>/`+
@@ -1007,6 +1066,16 @@ async function scan(){
   busy=false; $('btnScan').disabled=false;
 }
 $('btnFilter').onclick=()=>{ signalsOnly=!signalsOnly; render(cfg()); };
+$('btnE9').onclick=()=>{ e9Only=!e9Only; render(cfg()); };
+
+// The canvases size themselves from CSS, and the desktop breakpoint changes their
+// HEIGHT, not just their width -- so a rotation or a window drag across 701px would
+// otherwise leave the renko panes drawn at the old height and visibly stretched.
+// Re-rendering repaints the open detail at the new size. Debounced, because a drag
+// fires this continuously.
+let rzT=null;
+addEventListener('resize',()=>{ clearTimeout(rzT);
+  rzT=setTimeout(()=>{ if(Object.keys(results).length) render(cfg()); }, 180); });
 $('alertX').onclick=clearBadge;
 $('btnAlert').onclick=()=>{
   alertsOn=!alertsOn;
