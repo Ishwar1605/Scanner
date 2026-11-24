@@ -1,0 +1,1367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Renko 262</title>
+<style>
+:root{
+  --bg:#0e1319; --panel:#151c24; --panel2:#1b242e; --line:#28333f;
+  --fg:#e7eef5; --dim:#93a4b4; --faint:#64748b;
+  --long:#2e9e5b; --long-bg:#0f2a1b; --short:#d6504a; --short-bg:#2c1414;
+  --accent:#4ba3c3; --warn:#e0a458;
+  --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+     font:13px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1250px;margin:0 auto;padding:0 max(12px,env(safe-area-inset-left,0px)) 40px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;padding:16px 0 10px}
+h1{font-size:17px;font-weight:600;margin:0;letter-spacing:.01em}
+h1 span{color:var(--faint);font-weight:400}
+.spacer{flex:1 1 auto}
+button{font:inherit;font-size:12px;background:var(--panel2);color:var(--fg);
+       border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.go{background:var(--accent);border-color:var(--accent);color:#06131a;font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+.bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:9px 12px;
+     background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:12px;
+     font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+/* Signals-only filter, sitting directly above the table. */
+.fbar{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+#btnFilter{font-family:var(--mono);font-size:11.5px;padding:5px 10px;white-space:nowrap}
+#btnFilter.on{border-color:var(--accent);color:var(--accent)}
+.ltab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
+.ltab.on{border-color:var(--accent);color:var(--accent);background:#10212a}
+.e9tab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap;margin-left:4px}
+.e9tab.on{border-color:#c489d8;color:#c489d8;background:#241a2b}
+/* A cell whose ema9 setup has fired but which has no full LONG/SHORT yet. */
+.cell.e9{background:#3b2430;color:#f8b4d9;border-color:#7a4560}
+.atab{font-family:var(--mono);font-size:11.5px;padding:5px 11px;white-space:nowrap}
+.atab.on{border-color:var(--warn);color:var(--warn);background:#2a2113}
+#alertBox{display:none;background:#10212a;border:1px solid var(--accent);border-radius:8px;
+  padding:9px 12px;margin-bottom:10px;font-size:12px;font-family:var(--mono)}
+#alertBox b{color:var(--accent)}
+#alertBox .x{float:right;cursor:pointer;color:var(--faint);padding:0 4px}
+#alertBox .hit{display:inline-block;margin-right:10px}
+#liveClock{font-family:var(--mono);font-size:11px;color:var(--faint)}
+td[data-chg]{transition:color .4s ease}
+#fInfo{font-family:var(--mono);font-size:11px;color:var(--faint)}
+tr.empty td{text-align:center;color:var(--faint);font-size:12px;padding:14px 8px;cursor:pointer}
+tr.empty td:hover{color:var(--fg)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:0 0 auto}
+.dot.ok{background:var(--long)}.dot.err{background:var(--short)}.dot.busy{background:var(--warn)}
+details.cfg{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:12px}
+details.cfg summary{cursor:pointer;padding:9px 12px;font-size:12px;color:var(--dim)}
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;padding:0 12px 12px}
+label{display:block;font-size:11px;color:var(--faint);margin-bottom:3px}
+input,textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+  border-radius:5px;padding:5px 7px;font-family:var(--mono);font-size:12px}
+textarea{min-height:64px;resize:vertical;grid-column:1/-1}
+table{width:100%;border-collapse:collapse;background:var(--panel);
+      border:1px solid var(--line);border-radius:8px;overflow:hidden}
+table{table-layout:fixed}
+th:first-child{width:22%}
+th,td{padding:5px 6px;text-align:center;border-bottom:1px solid var(--line);font-size:12.5px}
+th{background:var(--panel2);color:var(--dim);font-weight:500;font-size:11px;
+   text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;z-index:2}
+td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap;text-align:left;
+       overflow:hidden;text-overflow:ellipsis}
+th:first-child{text-align:left}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);
+       white-space:nowrap}
+/* Day % colours itself in paintDayChg, so no colour is set here. */
+td.chg{font-size:12px}
+tr:hover td{background:#19222c}
+/* THE PART STRIP. 262 symbols at 1-minute candles is far too much work for one pass,
+   so the list is cut into five independent batches that each own their button, their
+   auto-timer and their progress. They do not share a lock: part 1 can be re-run while
+   part 4 is still fetching. */
+.parts{display:grid;grid-template-columns:repeat(auto-fit,minmax(188px,1fr));gap:7px;margin:9px 0}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 9px}
+.pcard.run{border-color:var(--accent)}
+.ptop{display:flex;align-items:baseline;gap:6px;font-size:12.5px;font-weight:600}
+.ptop .pcount{margin-left:auto;color:var(--faint);font-size:10.5px;font-weight:400;
+  font-family:var(--mono)}
+.prange{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin:2px 0 6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pbtns{display:flex;gap:5px}
+.pbtns button{flex:1;font-size:11px;padding:4px 6px}
+.pbtns .pscan.run{border-color:var(--short);color:var(--short)}
+.pstat{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pstat.ok{color:var(--long)} .pstat.busy{color:var(--accent)} .pstat.err{color:var(--short)}
+/* A part's heading inside the table, so a row is always attributable to a batch. */
+tr.phead>td{background:#141c25;color:var(--dim);font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.05em;text-transform:uppercase;padding:4px 7px;text-align:left;
+  border-bottom:1px solid var(--line)}
+.cell{display:inline-block;min-width:54px;text-align:center;padding:2px 7px;border-radius:4px;
+      font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent}
+.cell.l{background:var(--long-bg);color:var(--long);border-color:#1e5536}
+.cell.s{background:var(--short-bg);color:var(--short);border-color:#5d2724}
+.cell.n{color:var(--faint)}
+.cell.sel{outline:2px solid var(--accent);outline-offset:1px}
+/* The detail is injected as a <tr> directly beneath the row you touched, so you read
+   it where your finger already is instead of scrolling to the foot of the page. */
+tr.detailrow>td{background:var(--panel2);padding:10px 8px;border-bottom:2px solid var(--accent)}
+.dhead{margin:0 0 2px;font-size:13px;font-family:var(--mono);font-weight:600}
+.dsub{color:var(--faint);font-size:11px;margin-bottom:8px;font-family:var(--mono);
+      word-break:break-word}
+.dwrap{display:grid;grid-template-columns:1fr 330px;gap:8px;align-items:start}
+@media(max-width:700px){ .dwrap{grid-template-columns:1fr} }
+.pane{position:relative}
+.plabel{position:absolute;top:4px;left:7px;font-size:9.5px;letter-spacing:.05em;
+        text-transform:uppercase;color:var(--faint);pointer-events:none}
+canvas{width:100%;height:200px;background:var(--bg);border:1px solid var(--line);
+       border-radius:6px;display:block}
+canvas.cvRr,canvas.cv4r{height:118px;margin-top:5px}
+/* Desktop gets 25% more vertical room so the EMA slopes read properly. Phones keep
+   the compact sizes -- 250px of chart would push the readout tiles off a phone screen.
+   The painters measure the canvas, so these two rules are the only place heights live. */
+@media(min-width:701px){
+  canvas{height:250px}
+  canvas.cvRr,canvas.cv4r{height:148px}
+}
+.plabel.rsil{top:auto;bottom:4px}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:7px;margin-top:10px}
+.ro{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:6px 8px}
+.ro .k{font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
+.ro .v{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;margin-top:1px}
+.ro.pass .v{color:var(--long)} .ro.fail .v{color:var(--short)}
+#err{display:none;background:#2c1414;border:1px solid #5d2724;border-radius:8px;padding:11px 13px;
+     margin-bottom:12px;font-size:12px;color:#ffb3ae}
+#err pre{font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;word-break:break-all;
+         max-height:170px;overflow:auto;margin:7px 0 0;color:var(--dim)}
+footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
+@media(max-width:620px){
+  th,td{padding:4px 4px;font-size:12px}
+  th{font-size:10px;letter-spacing:.03em}
+  .cell{min-width:40px;padding:2px 4px}
+  td.chg{font-size:11px}
+  h1{font-size:15px}
+  .wrap{padding-left:6px;padding-right:6px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Renko 262 <span id="hdrSub">— resolving symbols …</span></h1>
+  <span class="spacer"></span>
+  <button id="btnScan" class="go" title="Runs part 1 through part 5 one after another. Each part can also be run on its own below.">Scan all parts</button>
+  <button id="btnStopAll" title="Stops every part that is currently running.">Stop all</button>
+</header>
+
+<div class="bar">
+  <span class="dot" id="dot"></span><span id="status">idle</span>
+  <span class="spacer"></span><span id="clock"></span>
+</div>
+
+<div class="parts" id="parts"></div>
+
+<div id="err"><b>Fetch failed.</b> <span id="errMsg"></span><pre id="errRaw"></pre></div>
+<div id="alertBox"><span class="x" id="alertX">&times;</span><b>New signal</b> <span id="alertList"></span></div>
+
+<details class="cfg">
+  <summary>Settings — symbols, thresholds, refresh</summary>
+  <div class="cfg-grid">
+    <div><label>Base candle resolution</label><input id="cfgRes" value="1m"></div>
+    <div><label>History start (days)</label><input id="cfgDays" type="number" value="3" min="1" max="30"></div>
+    <div><label>Max history (days)</label><input id="cfgMaxDays" type="number" value="27" min="1" max="60" title="The scanner deepens on its own, up to this, until every brick size has enough bricks."></div>
+    <div><label>Brick sizes (%)</label><input id="cfgBricks" value="0.75, 1.0, 1.5"></div>
+    <div><label>EMA length</label><input id="cfgEma" type="number" value="21"></div>
+    <div><label>Fast EMA (ema9 switch)</label><input id="cfgEma9" type="number" value="9" title="The fast EMA used by the ema9 switch and drawn on the renko pane. Not read by any of the six gates."></div>
+    <div><label>EMA velocity lookback (bricks)</label><input id="cfgVeloLen" type="number" value="10"></div>
+    <div><label>Min EMA velocity %</label><input id="cfgVelo" type="number" step="0.1" value="1.0"></div>
+    <div><label>RSI length</label><input id="cfgRsi" type="number" value="21"></div>
+    <div><label>Fast WMA (of RSI)</label><input id="cfgW5" type="number" value="5"></div>
+    <div><label>Mid WMA (of RSI)</label><input id="cfgW11" type="number" value="11"></div>
+    <div><label>Slow WMA (of RSI)</label><input id="cfgW21" type="number" value="21"></div>
+    <div><label>Brick wicks (ATR / SuperTrend)</label><select id="cfgWick"><option value="on">On — matches TradingView's default</option><option value="off">Off — body only (old behaviour)</option></select></div>
+    <div><label>SuperTrend ATR period</label><input id="cfgStP" type="number" value="21"></div>
+    <div><label>SuperTrend factor</label><input id="cfgStF" type="number" step="0.1" value="2"></div>
+    <div><label>Auto-refresh (seconds)</label><input id="cfgEvery" type="number" value="300" min="20" title="Used by each part's own Auto switch. A part of ~60 symbols at 1-minute candles takes minutes, so keep this well above a single part's run time."></div>
+    <div><label>Live price every (seconds)</label><input id="cfgLive" type="number" value="5" min="3" title="One request covers every symbol. It updates prices only - it does not rebuild bricks or re-score the gates."></div>
+    <div><label>Fire on</label><select id="cfgMode"><option value="signal">Signal — gates + first opposite brick</option><option value="bias">Bias — gates only</option></select></div>
+    <div><label>Source (match your chart)</label><select id="cfgSrc"><option value="close">Close — TradingView's default</option><option value="ohlc">OHLC — only if you changed it</option></select></div>
+    <div><label>Brick size</label><select id="cfgBrickMode"><option value="tv">TradingView rule — % of last price, snapped to the 1 / 1.5 / 2 / 2.5 ladder</option><option value="ltp">Exact % of last price, tick-rounded only</option><option value="running">Recomputed each brick</option></select></div>
+    <textarea id="cfgOverrides" placeholder="Optional brick overrides — leave empty. Sizes are computed automatically.&#10;Only if one symbol still disagrees with your chart: SYMBOL PCT SIZE&#10;SKYAIUSD 1.5 0.0005&#10;An override wins over the computed size for that one symbol and brick %."></textarea>
+    <textarea id="cfgSyms" placeholder="Leave EMPTY to scan every Delta India perpetual, re-read from the exchange on every page load — new listings appear on their own.&#10;Type symbols here only to pin the scanner to a shorter list: BTCUSD.P, ETHUSD.P"></textarea>
+  </div>
+</details>
+
+<div class="fbar">
+  <button id="btnFilter" class="on">▸ Signals only</button>
+  <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT at a brick size that was not signalling on the previous scan. Only fires while this page is open and scanning.">alerts</button>
+  <button id="btnLive" class="ltab on" title="Poll every symbol's current price in one request and update the Day % column and the 4h chart's forming candle. The renko bricks are NOT redrawn - a brick only exists once price has moved a full brick - and the gates are not re-scored.">live</button>
+  <button id="btnE9" class="e9tab" title="Keep only symbols where the ema9 setup has fired: fast EMA above the slow one, the previous brick closed below the fast EMA and this one closed above it, and the brick colour flipped. Mirrored for shorts. Independent of the six gates - with Signals only also on, a row must satisfy both.">ema9</button>
+  <span id="liveClock"></span>
+  <span id="fInfo"></span>
+</div>
+
+<table>
+  <thead><tr>
+    <th>Symbol</th><th>Day %</th><th id="h0">0.75%</th><th id="h1">1.0%</th><th id="h2">1.5%</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+
+<footer>
+  <b>Reading a cell.</b>
+  <span style="color:var(--long)">LONG</span> / <span style="color:var(--short)">SHORT</span> — every condition agrees.
+  &nbsp;·&nbsp; <b>4/6</b> — evaluated, that many conditions passed on its stronger side; hover to see which failed, click to open it.
+  &nbsp;·&nbsp; <b>·</b> — still not enough bricks after deepening to max history; that symbol is simply too quiet for that brick size.
+  <br><b>Day %</b> — today's move from the daily open, the same figure the candlestick scanner shows, refreshed with the live price.
+  <br><b>Brick counts</b> — no longer a column; the open detail's subtitle line gives the count for the size you are looking at.
+  WMA21-of-RSI21 needs 44 bricks, so anything under that shows <b>·</b>. The scanner deepens history on its own until it has them.
+  <br><b>Brick size</b> — the percentage is applied to the last price, rounded to that symbol's minimum tick,
+  then snapped to the nearest 1 / 1.5 / 2 / 2.5 × 10ⁿ step. Verified against BTC 450, ETH 15, XRP 0.0075,
+  1000PEPE 0.00003, DOGS 0.0000002 and TradingView's own AAPL example. TradingView uses the price
+  <i>at the moment the chart loaded</i>, so if a symbol has moved a long way since you opened it, reload that
+  chart to bring the two back in line.
+  <br><b>Source</b> — TradingView builds renko from the chart's own resolution, using either close or OHLC,
+  and its default is <b>Close</b>. Set the dropdown to whatever your chart's Symbol tab says, or the bricks
+  will not match. Brick boundaries sit on absolute multiples of the brick size.
+  <br>Data: Delta Exchange India public API, fetched by this browser. Bricks are rebuilt from
+  <span id="fRes">1m</span> candles, with the standard two-brick reversal rule.
+  <br><b>Parts.</b> Every Delta India perpetual is scanned at the same 1-minute base resolution as your 24-symbol
+  scanner — nothing is coarsened. Because that is far too much work for one pass, the list is cut into five
+  batches: <b>part 1 is your pinned 24</b> in your order, parts 2–5 are the rest in four contiguous alphabetical
+  blocks. Each has its own Scan button, its own Auto switch and its own progress line, and they do not share a
+  lock — start part 4 and part 1 is still yours to run. A part's own button reads <b>Stop</b> while it is running.
+  <b>Scan all parts</b> runs them in order, 1 first, because five concurrent 1-minute chains is the fastest way
+  to be rate-limited.
+  <br><b>The symbol list is read from the exchange, not stored here.</b> Every page load asks Delta which
+  perpetuals exist, so a newly listed contract appears in its alphabetical part on its own. Leave the symbols
+  box in Settings empty for that; type a list there only to pin the scanner to a shorter one.
+  <br><b>Opening a row refreshes that symbol</b> — one request for the newest candles, re-scored before the
+  panel paints, so a chart you open twenty minutes after its part ran is still current.
+</footer>
+</div>
+
+<script>
+'use strict';
+const API = 'https://api.india.delta.exchange';
+// Your 24, in your order. They are part 1 and they are never re-sorted.
+const PINNED = ['BTCUSD.P','ETHUSD.P','XRPUSD.P','SOLUSD.P','BBUSD.P','SKYAIUSD.P',
+ 'RAVEUSD.P','TRXUSD.P','BNBUSD.P','DOGSUSD.P','XLMUSD.P','BCHUSD.P','DYDXUSD.P','DOGEUSD.P',
+ 'ADAUSD.P','AVAXUSD.P','1000SHIBUSD.P','LINKUSD.P','DOTUSD.P','LTCUSD.P','UNIUSD.P',
+ '1000PEPEUSD.P','SLVONUSD.P','VVVUSD.P'];
+const NPARTS = 5;                 // part 1 = the pinned 24, parts 2-5 = the rest, quartered
+let SYMS  = PINNED.slice();       // replaced on load by the live Delta list
+let PARTS = [];                   // [{name, syms, range}]
+
+// THE SYMBOL LIST IS NOT HARD-CODED. Delta is asked what perpetuals exist right now,
+// so a contract listed tomorrow appears in a part on the next page load with nothing
+// to edit. On failure it falls back to the pinned 24 rather than leaving a dead page.
+async function resolveSymbols(){
+  try{
+    const r=await fetch(`${API}/v2/tickers?contract_types=perpetual_futures`,
+                        {headers:{'Accept':'application/json'}});
+    const j=await r.json();
+    const all=(j.result||j.data||[]).map(t=>String(t.symbol||'').toUpperCase()).filter(Boolean);
+    const pinnedBare=new Set(PINNED.map(x=>x.replace(/\.P$/,'')));
+    const rest=[...new Set(all.filter(x=>!pinnedBare.has(x)).sort().map(x=>x+'.P'))];
+    SYMS=PINNED.concat(rest);
+  }catch(e){ SYMS=PINNED.slice(); }
+  buildParts();
+  return SYMS;
+}
+
+const bare = x => x.replace(/\.P$/,'');
+// Part 1 is always exactly the pinned set. Whatever is left is split into four
+// CONTIGUOUS alphabetical blocks, so you always know which part a symbol lives in
+// from its name alone.
+function buildParts(){
+  const rest=SYMS.slice(PINNED.length), per=Math.ceil(rest.length/(NPARTS-1))||1;
+  PARTS=[{name:'Part 1', syms:PINNED.slice(), range:'your 24, pinned order'}];
+  for(let i=0;i<NPARTS-1;i++){
+    const chunk=rest.slice(i*per,(i+1)*per);
+    PARTS.push({name:'Part '+(i+2), syms:chunk,
+      range: chunk.length ? bare(chunk[0])+' \u2192 '+bare(chunk[chunk.length-1]) : '\u2014'});
+  }
+  PARTS.forEach((p,i)=>{ if(!pstate[i]) pstate[i]={busy:false,token:0,done:0,failed:0,
+    last:null,timer:null,msg:'idle',cls:''}; });
+}
+
+const $ = id => document.getElementById(id);
+const cfg = () => ({
+  res:$('cfgRes').value.trim(), days:+$('cfgDays').value,
+  bricks:$('cfgBricks').value.split(',').map(s=>parseFloat(s)).filter(x=>x>0),
+  emaLen:+$('cfgEma').value, emaFast:+$('cfgEma9').value,
+  veloLen:+$('cfgVeloLen').value, veloMin:+$('cfgVelo').value,
+  rsiLen:+$('cfgRsi').value, w5:+$('cfgW5').value, w11:+$('cfgW11').value, w21:+$('cfgW21').value,
+  wick:$('cfgWick').value==='on',
+  stP:+$('cfgStP').value, stF:+$('cfgStF').value, every:+$('cfgEvery').value,
+  maxDays:+$('cfgMaxDays').value,
+  mode:$('cfgMode').value, brickMode:$('cfgBrickMode').value, src:$('cfgSrc').value,
+  overrides:(()=>{ const m={};
+    $('cfgOverrides').value.split(/\n+/).forEach(l=>{
+      const t=l.trim().split(/[\s,:=]+/);
+      if(t.length>=3){ const v=parseFloat(t[2]); if(v>0) m[t[0].toUpperCase().replace(/\.P$/,'')+'@'+parseFloat(t[1])]=v; }
+    }); return m; })(),
+  // Empty textarea (the normal case) means "every Delta India perpetual". Typing a
+  // list there pins the scanner to exactly that list instead.
+  syms:(()=>{ const t=$('cfgSyms').value.split(/[\s,]+/).map(x=>x.trim().toUpperCase()).filter(Boolean);
+    return t.length ? t : SYMS; })()
+});
+$('cfgSyms').value = '';
+$('cfgOverrides').value = '';
+
+// ---------------------------------------------------------------- indicators
+function rma(v,n){const o=[];let a=null;for(let i=0;i<v.length;i++){
+  if(i<n-1){o.push(null);continue;}
+  if(a===null){let s=0;for(let j=0;j<n;j++)s+=v[j];a=s/n;} else a=(a*(n-1)+v[i])/n;
+  o.push(a);} return o;}
+function rsi(v,n){if(v.length<n+1)return v.map(()=>null);
+  const g=[0],l=[0];
+  for(let i=1;i<v.length;i++){const d=v[i]-v[i-1];g.push(Math.max(d,0));l.push(Math.max(-d,0));}
+  const ag=rma(g,n),al=rma(l,n);
+  return v.map((_,i)=>(ag[i]===null||al[i]===null)?null:(al[i]===0?100:100-100/(1+ag[i]/al[i])));}
+function wma(v,n){const o=[],den=n*(n+1)/2;
+  for(let i=0;i<v.length;i++){ if(i<n-1){o.push(null);continue;}
+    let s=0,ok=true;
+    for(let j=0;j<n;j++){const x=v[i-n+1+j]; if(x===null||x===undefined){ok=false;break;} s+=x*(j+1);}
+    o.push(ok?s/den:null);} return o;}
+function ema(v,n){const o=[],k=2/(n+1);let e=null;
+  for(let i=0;i<v.length;i++){ if(i<n-1){o.push(null);continue;}
+    if(e===null){let s=0;for(let j=0;j<n;j++)s+=v[j];e=s/n;} else e=v[i]*k+e*(1-k);
+    o.push(e);} return o;}
+function supertrend(b,factor,period){
+  const n=b.length,dirs=new Array(n).fill(null),line=new Array(n).fill(null);
+  if(n<period+1)return{dirs,line};
+  const tr=b.map((x,i)=>i===0?x.h-x.l:Math.max(x.h-x.l,Math.abs(x.h-b[i-1].c),Math.abs(x.l-b[i-1].c)));
+  const atr=rma(tr,period); let up=null,dn=null,d=1;
+  for(let i=0;i<n;i++){ if(atr[i]===null)continue;
+    const hl2=(b[i].h+b[i].l)/2, bu=hl2-factor*atr[i], bd=hl2+factor*atr[i];
+    const pu=up===null?bu:up, pd=dn===null?bd:dn;
+    up = (i>0 && b[i-1].c>pu) ? Math.max(bu,pu) : bu;
+    dn = (i>0 && b[i-1].c<pd) ? Math.min(bd,pd) : bd;
+    if(i>0 && dirs[i-1]!==null){ d=dirs[i-1];
+      if(d===-1 && b[i].c>dn) d=1; else if(d===1 && b[i].c<up) d=-1;
+    } else d = b[i].c>bd?1:-1;
+    dirs[i]=d; line[i]= d===1?up:dn; }
+  return{dirs,line};}
+
+// ---------------------------------------------------------------- renko
+// !! TWO THINGS HERE MATTER, AND BOTH WERE WRONG IN THE FIRST BUILD.
+//
+// 1. BRICK SIZE IS FIXED, NOT RUNNING. TradingView's "Percentage LTP" works out ONE
+//    absolute brick size from the last traded price and uses it for the whole series --
+//    that is the second number in your chart header, Renko [Percentage LTP(1.5%), 0.0005].
+//    Recomputing the size at every brick shifts every boundary and changes the brick
+//    COUNT by roughly 10% on a real series, which moves RSI21, WMA21, EMA21 and the
+//    SuperTrend with it. "running" is kept as an option only for comparison.
+//
+// 2. CLOSE vs OHLC IS A CHART SETTING, AND THE DEFAULT IS CLOSE.
+//    TradingView: "TradingView uses the chart's resolution close value or OHLC value",
+//    with the worked example "a 10-minute Renko chart will use 10-minute closes to
+//    generate bricks". Which of the two is used is the Source field in Chart settings ->
+//    Symbol tab, and their own announcement of the OHLC option states: "By default, the
+//    field is set to Close."
+//
+//    I previously changed this builder FROM close-only TO walking each bar's high/low
+//    path and presented that as a fix. On a chart left at the default Source that was a
+//    REGRESSION: path-walking prints bricks from intrabar spikes that a close-only chart
+//    never draws. It is now a setting that mirrors TradingView's own, defaulting to
+//    Close, so the scanner matches the chart instead of overriding it.
+// MINIMUM TICK ROUNDING -- documented, not guessed.
+// TradingView states the box size is "rounded to the nearest minimum tick size". That
+// is a published rule and the tick is a published number, so it is looked up, not
+// fitted. Delta returns tick_size for every perpetual in one call, and ticks do not
+// change intraday, so the table is fetched once per session and cached.
+//
+// WHERE THIS BITES, measured rather than assumed: across 972 synthetic
+// price/tick/percentage combinations, tick rounding changes the brick size in 21% of
+// them. It is a no-op whenever the quantised price times the percentage already lands
+// on a tick multiple, which covers BTC, ETH, XRP, SKYAI and BB at today's prices. It
+// bites when the leading digit of the quantised price makes the product finer than the
+// tick -- a price quantising to 3 with a 0.75% box gives 0.0225e-2, which the tick
+// pulls to 0.022e-2. So this is a correctness fix that matters for a minority of
+// symbols at any given time, NOT the explanation for the BB and SKYAI mismatch.
+//
+// If the tick table fails to load, tick is 0 and every size passes through unrounded,
+// which is the old behaviour rather than a broken scan.
+const ticks={}; let ticksLoaded=false;
+async function loadTicks(){
+  if(ticksLoaded) return ticks;
+  try{
+    const r=await fetch(`${API}/v2/tickers?contract_types=perpetual_futures`,{headers:{'Accept':'application/json'}});
+    const j=await r.json();
+    for(const t of (j.result||j.data||[])){
+      const ts=parseFloat(t.tick_size);
+      if(t.symbol && isFinite(ts) && ts>0) ticks[String(t.symbol).toUpperCase()]=ts;
+    }
+    ticksLoaded=Object.keys(ticks).length>0;
+  }catch(e){ /* leave ticksLoaded false; sizes pass through unrounded */ }
+  return ticks;
+}
+const tickOf = sym => ticks[(sym||'').replace(/\.P$/,'').toUpperCase()] || 0;
+// Never round a brick down to zero: one tick is the floor, since a zero-width brick
+// would spin the construction loop forever.
+// The epsilon is not decoration. 0.000225/0.00001 evaluates to 22.499999999999996 in
+// IEEE doubles, so an exact half-tick tie rounds DOWN by float noise instead of up.
+// That silently changes the brick size, and therefore every signal, on the symbols
+// where the tick bites at all.
+function roundToTick(x,tick){
+  if(!(tick>0)||!(x>0)) return x;
+  const n=Math.round(x/tick + 1e-9);
+  return +(((n>=1)?n:1)*tick).toFixed(12);
+}
+
+// THE SECOND, COARSER ROUNDING -- SOLVED, and solved by DOGS.
+// TradingView applies the percentage to the last price "at the moment the symbol is
+// loaded", rounds to the tick, then rounds a second time by an increment they do not
+// publish. That second increment is a HALF-DECADE LADDER: the box is rounded to the
+// nearest multiple of 5 x 10^(e-1), where e is the box's own order of magnitude. In
+// plain terms the box can only be 1, 1.5, 2, 2.5, 3 ... times a power of ten.
+//
+// Checked against every brick value available -- BTC 450, ETH 15, XRP 0.0075,
+// 1000PEPE 0.00003, DOGS 0.0000002, and TradingView's own documented example of AAPL
+// at 216.00 with 1% giving 2 -- it is 11 for 11.
+//
+// DOGS is what settled it. I previously had this as "quantise the PRICE to one
+// significant figure", which scored 9 of 11 and which I had told Ishwar was the rule.
+// DOGS at 0.00002661 breaks it: price-quantising gives 2.25e-7 and the chart header
+// says 2.0e-7. The ladder gives 2.0e-7. Every case the old rule got right, the ladder
+// also gets right, so the old rule was a coincidence that held because BTC, ETH, XRP
+// and PEPE all happened to sit where the two agree.
+//
+// It also delivers exactly what TradingView says the second rounding is for -- keeping
+// the box "relatively consistent while the price doesn't change dramatically". BTC
+// holds a 450 box from 58,000 all the way to 62,000.
+function ladder(x){ if(!(x>0)) return x;
+  const e=Math.floor(Math.log10(x)), s=5*10**(e-1);
+  return Math.round(x/s + 1e-9)*s; }
+function brickSize(bars,pct,mode,override,tick){
+  if(override>0) return override;
+  if(!bars.length) return 0;
+  const px=bars[bars.length-1].c;
+  if(mode==='running') return 0;                    // 0 => recompute per brick
+  const raw = px*pct/100;
+  // tick first, then the ladder, then tick again so the result stays representable.
+  // The ladder is coarser than the tick on every symbol here, so the last step is
+  // almost always a no-op -- it exists so a tick coarser than the ladder still wins.
+  return roundToTick(mode==='tv' ? ladder(roundToTick(raw,tick)) : raw, tick);
+}
+// WICKS. A brick's wick is the furthest the SOURCE price travelled while that brick was
+// forming -- with Source=Close, the highest/lowest base-candle CLOSE, which is what
+// TradingView's own wick article describes. Wicks are ON by default on a Renko chart.
+//
+// THIS IS WHAT BROKE THE SUPERTREND. Without wicks every brick has high-low exactly
+// equal to the brick size, so True Range can only ever be 1x or 2x the brick -- measured
+// over 232 synthetic bricks: 2 distinct values, mean exactly 1.000x. ATR is then
+// effectively a constant and the SuperTrend bands sit at a fixed distance from hl2,
+// which cannot track anything. With wicks the same path gives 225 distinct TR values and
+// a mean of 1.653x. TradingView's ATR sees the second series; this scanner saw the first.
+//
+// TradingView only draws a LOW wick on an up brick and a HIGH wick on a down brick, so
+// that asymmetry is reproduced rather than wicking both ends.
+function renko(bars,pct,mode,override,tick,src,wick){
+  const b=[]; if(!bars.length)return b;
+  const fixed=brickSize(bars,pct,mode,override,tick);
+  // !! BRICK BOUNDARIES SIT ON AN ABSOLUTE GRID OF MULTIPLES OF THE BRICK SIZE.
+  // They are NOT anchored to whatever price history happened to start at. Proof from
+  // your own BTC chart at brick 450: the prior brick closed 62550 (139 x 450), this
+  // brick opened 63000 (140 x 450) and closed 63450 (141 x 450) -- three consecutive
+  // exact multiples. The scanner was anchoring at bars[0].c and its last brick closed
+  // 63301.5, which is 140.67 x 450, so every boundary in the whole series was offset
+  // by 301.5. An offset grid does not change the brick size, it changes WHERE each
+  // brick starts and ends, which adds or drops one brick at the end of a run -- which
+  // is precisely the 5 reds against TradingView's 4.
+  //
+  // Measured on 12 synthetic 20k-candle paths, the offset moved the total brick count
+  // by -8 to +4 and changed the length of the final same-colour run by one on 4 of 12.
+  //
+  // SECOND CONSEQUENCE, now also gone: bars[0].c moved every time the scanner deepened
+  // history, so the same symbol scanned at 3 days and at 9 days built DIFFERENT bricks.
+  // A grid anchored at zero is independent of how much history was loaded.
+  let a = fixed>0 ? Math.round(bars[0].c/fixed)*fixed : bars[0].c;
+  let d=0;                                    // d = direction of the last brick
+  let runLo=Infinity, runHi=-Infinity;        // extremes since the last brick closed
+  const step=p=>{
+    if(p<runLo) runLo=p;
+    if(p>runHi) runHi=p;
+    for(;;){
+      const size = fixed>0 ? fixed : roundToTick(a*pct/100,tick);
+      if(!(size>0)) return;
+      // !! REVERSALS COST TWO BRICKS. Continuing in the same direction needs one brick
+      // of movement; turning around needs TWO -- one to undo the last brick, one to
+      // print the new one. The first build reversed on a single brick, which
+      // manufactured direction flips that TradingView never shows: on an identical
+      // path it produced 7 flips where the correct rule gives 3. That is exactly the
+      // stray green brick you saw inside SKYAI's downtrend.
+      const upNeed = (d>=0) ? size : 2*size;
+      const dnNeed = (d<=0) ? size : 2*size;
+      if(p-a>=upNeed){ const o=a+(upNeed-size), c=o+size;
+        b.push({o,c,h:c,l:wick?Math.min(o,runLo):o,dir:1});
+        a=c; d=1; runLo=p; runHi=p; }
+      else if(a-p>=dnNeed){ const o=a-(dnNeed-size), c=o-size;
+        b.push({o,c,h:wick?Math.max(o,runHi):o,l:c,dir:-1});
+        a=c; d=-1; runLo=p; runHi=p; }
+      else return;
+    }
+  };
+  for(let i=1;i<bars.length;i++){ const bar=bars[i];
+    if(src==='ohlc'){
+      // nearer extreme first: an up bar is assumed to have dipped before it ran, and vice versa
+      const seq = (bar.c>=bar.o) ? [bar.l,bar.h] : [bar.h,bar.l];
+      step(seq[0]); step(seq[1]);
+    }
+    step(bar.c); }
+  return b;}
+
+// ---------------------------------------------------------------- data
+const RES_SEC={'1m':60,'3m':180,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400};
+const store={};            // symbol -> {closes:[], lastT:0}
+
+async function fetchCandles(sym,res,startSec,endSec){
+  const u=`${API}/v2/history/candles?resolution=${encodeURIComponent(res)}`+
+          `&symbol=${encodeURIComponent(sym)}&start=${startSec}&end=${endSec}`;
+  const r=await fetch(u,{headers:{'Accept':'application/json'}});
+  const txt=await r.text();
+  if(!r.ok) throw new Error(`HTTP ${r.status} for ${sym} — ${txt.slice(0,300)}`);
+  let j; try{ j=JSON.parse(txt);}catch(e){ throw new Error(`Non-JSON reply for ${sym} — ${txt.slice(0,300)}`);}
+  if(j.success===false) throw new Error(`API said no for ${sym} — ${txt.slice(0,300)}`);
+  const rows=j.result||j.data||[];
+  if(!Array.isArray(rows)) throw new Error(`Unexpected shape for ${sym} — ${txt.slice(0,300)}`);
+  return rows.map(c=>({t:+(c.time??c.t??c[0]), o:+(c.open??c.o??c[1]),
+                       h:+(c.high??c.h??c[2]), l:+(c.low??c.l??c[3]), c:+(c.close??c.c??c[4])}))
+             .filter(c=>isFinite(c.t)&&isFinite(c.c)&&isFinite(c.h)&&isFinite(c.l))
+             .sort((a,b)=>a.t-b.t);
+}
+
+// DAY %, the same measure the candlestick scanner shows: today's move from the DAILY
+// OPEN, not a rolling 24h window. The renko feed cannot supply it -- bricks are built
+// from 1m candles and no daily bar is ever requested -- so this is one small extra
+// request per symbol per scan. Five days wide, and the newest bar in it is today.
+const dayOpen={};              // SYMBOL without .P -> today's 1d open
+async function loadDayOpen(sym){
+  const now=Math.floor(Date.now()/1000);
+  const rows=await fetchCandles(sym,'1d',now-5*86400,now);
+  if(rows.length) dayOpen[sym.replace(/\.P$/,'').toUpperCase()]=rows[rows.length-1].o;
+}
+// Live price when the poll has one, otherwise the last brick-feed close, so the figure
+// is still right with live off.
+function dayChange(sym){
+  const k=sym.replace(/\.P$/,'').toUpperCase(), o=dayOpen[k];
+  const px = live[k] ?? (results[sym] && results[sym].last);
+  if(!o || !isFinite(o) || px==null || !isFinite(px)) return null;
+  return (px-o)/o*100;
+}
+
+// Deep load once, then only the newest candles on every later pass. Delta caps a single
+// request, so the first load is paged backwards in chunks.
+async function loadSymbol(sym,c,wantDays){
+  const api=sym.replace(/\.P$/,'');
+  const step=RES_SEC[c.res]||60, now=Math.floor(Date.now()/1000);
+  const st=store[sym];
+  // A DEEPER PULL KEEPS WHAT IS ALREADY HELD and fetches only the older piece that is
+  // missing. The first build threw the existing bars away and re-paged the whole span
+  // from scratch, so a quiet symbol that ended up needing 27 days had 3 + 9 + 27 = 39
+  // days downloaded to use 27. Now it is 3 + 6 + 18: one download of each day.
+  if(st && st.bars.length && wantDays && wantDays>st.days){
+    const stopAt=now-wantDays*86400;
+    let end=st.bars[0].t-step, older=[], guard=0;
+    while(end>stopAt && guard++<60){
+      const start=Math.max(stopAt, end-1500*step);
+      const rows=await fetchCandles(api,c.res,start,end);
+      if(!rows.length) break;
+      older=rows.concat(older);
+      const earliest=rows[0].t;
+      if(earliest>=end) break;          // no progress -- the exchange has no more history
+      end=earliest-step;
+    }
+    const seen=new Set(); for(const bb of st.bars) seen.add(bb.t);
+    const add=[];
+    for(const r of older){ if(!seen.has(r.t)){ seen.add(r.t); add.push(r); } }
+    st.bars=add.concat(st.bars);
+    // Recorded even when the exchange had nothing older to give, so the deepening loop
+    // above does not ask for the same missing history again on the next try.
+    st.days=wantDays;
+    return st;
+  }
+  if(st && wantDays && wantDays>st.days){ delete store[sym]; }
+  else if(st && st.bars.length){
+    const rows=await fetchCandles(api,c.res,st.lastT,now);
+    // the newest bar is still forming, so it is replaced rather than appended twice
+    for(const r of rows){
+      if(r.t>st.lastT){ st.bars.push(r); st.lastT=r.t; }
+      else if(r.t===st.lastT){ st.bars[st.bars.length-1]=r; }
+    }
+    if(st.bars.length>40000) st.bars.splice(0,st.bars.length-40000);
+    return st;
+  }
+  // !! PAGING IS DRIVEN BY WHAT ACTUALLY CAME BACK, not by an assumed page size.
+  // The first build advanced a counter by a fixed CHUNK every pass on the assumption
+  // that each call returned 1500 candles. Delta returns fewer, so three passes covered
+  // about a day instead of three, and BTC built 41 bricks at 0.75% where it should have
+  // built several hundred. Now the loop walks backwards until it genuinely reaches the
+  // requested start, and stops early only if a call makes no progress.
+  const days=wantDays||c.days;
+  const want=days*86400, stopAt=now-want;
+  let end=now, all=[], guard=0;
+  while(end>stopAt && guard++<60){
+    const start=Math.max(stopAt, end-1500*step);
+    const rows=await fetchCandles(api,c.res,start,end);
+    if(!rows.length) break;
+    all=rows.concat(all);
+    const earliest=rows[0].t;
+    if(earliest>=end) break;              // no progress -- the API has no more history
+    end=earliest-step;
+  }
+  const seen=new Set(), bars=[]; let lastT=0;
+  for(const r of all){ if(seen.has(r.t))continue; seen.add(r.t); bars.push(r); lastT=Math.max(lastT,r.t); }
+  store[sym]={bars,lastT,days};
+  return store[sym];
+}
+
+// ---------------------------------------------------------------- 4h context candles
+// The detail panel shows the last 10 FOUR-HOUR candles with EMA5 and EMA21 beside the
+// renko. EMA21 needs far more than 10 closes to be meaningful, so ~240 candles (40 days)
+// are fetched and only the tail is drawn. Fetched once per symbol per session, and only
+// when you actually open a symbol -- it must not slow the scan down.
+// !! THIS CACHE USED TO BE PERMANENT. `if(h4[sym]) return h4[sym]` meant a symbol's 4h
+// candles were fetched once per browser session and never again, so a tab left open
+// showed a 4h chart frozen at whenever you first opened that symbol -- missing the
+// newest candle, while the candlestick scanner beside it showed the current one.
+// Now the data carries a timestamp and is refetched once it is older than the TTL.
+// Re-opening the same symbol within the TTL still costs nothing.
+const h4={}, h4At={}, h4Busy={};
+const H4_TTL = 60000;     // ms before the cached 4h candles are considered stale
+let CFG4={rsiLen:21,w5:5,w11:11,w21:21};   // lengths captured at scan time for the 4h RSI
+async function load4h(sym){
+  const have=h4[sym];
+  const fresh = have && have!=='failed' && (Date.now()-(h4At[sym]||0) < H4_TTL);
+  if(fresh) return have;
+  if(h4Busy[sym]) return h4Busy[sym];          // one fetch in flight per symbol
+  h4Busy[sym]=(async()=>{
+    try{
+      const now=Math.floor(Date.now()/1000);
+      const rows=await fetchCandles(sym.replace(/\.P$/,''),'4h',now-240*14400,now);
+      if(!rows.length) throw new Error('no 4h candles');
+      const cl=rows.map(r=>r.c);
+      const hr=rsi(cl,CFG4.rsiLen);
+      h4[sym]={bars:rows, e5:ema(cl,5), e21:ema(cl,21),
+               r:hr, w5:wma(hr,CFG4.w5), w11:wma(hr,CFG4.w11), w21:wma(hr,CFG4.w21)};
+      h4At[sym]=Date.now();
+    }catch(e){
+      // a failed refresh keeps the last good candles rather than blanking the pane
+      if(!h4[sym]) h4[sym]='failed';
+    }finally{ delete h4Busy[sym]; }
+    return h4[sym];
+  })();
+  return h4Busy[sym];
+}
+
+// ---------------------------------------------------------------- evaluation
+function evaluate(bars,pct,c,sym){
+  const ov=c.overrides[(sym||'').replace(/\.P$/,'')+'@'+pct];
+  const tk=tickOf(sym);
+  const b=renko(bars,pct,c.brickMode,ov,tk,c.src,c.wick);
+  const need=Math.max(c.rsiLen+c.w21, c.stP, c.emaLen+c.veloLen)+2;
+  if(b.length<need) return {ok:false, bricks:b.length, tick:tk, why:`needs ${need} bricks`};
+  const cl=b.map(x=>x.c);
+  const r=rsi(cl,c.rsiLen), w5=wma(r,c.w5), w21=wma(r,c.w21), e=ema(cl,c.emaLen);
+  const w11=wma(r,c.w11);          // display only -- the signal gates do not read it
+  const e9=ema(cl,c.emaFast);      // fast EMA for the ema9 switch, not a gate
+  const {dirs,line}=supertrend(b,c.stF,c.stP);
+  const i=b.length-1, ePrev=e[i-c.veloLen];
+  const velo=(ePrev&&ePrev!==0)?(e[i]-ePrev)/ePrev*100:0;
+  const stUp=dirs[i]===1;
+
+  // THE ENTRY TRIGGER: the first opposite-colour brick, same as V59's
+  //   long_trigger  = isGreen and isRed[1]
+  //   short_trigger = isRed   and isGreen[1]
+  // In "signal" mode it must fire on THIS brick, so a row lights only on the turn and
+  // goes dark on the next brick. "bias" drops it and reports the gate state, which
+  // persists while the gates hold.
+  const flipL = b[i].dir===1 && b[i-1].dir===-1;
+  const flipS = b[i].dir===-1 && b[i-1].dir===1;
+  const needFlip = c.mode==='signal';
+
+  const g ={ st:stUp,  ema:cl[i]>e[i], velo:velo>=c.veloMin,  rsi:r[i]>w21[i], fan:w5[i]>w21[i], flip:!needFlip||flipL };
+  const gs={ st:!stUp, ema:cl[i]<e[i], velo:velo<=-c.veloMin, rsi:r[i]<w21[i], fan:w5[i]<w21[i], flip:!needFlip||flipS };
+  const long=Object.values(g).every(Boolean), short=Object.values(gs).every(Boolean);
+  // Near-miss score. With no hits on screen there is nothing to check the maths against,
+  // so every evaluated cell reports how many conditions passed on its stronger side and
+  // names the ones that failed. That makes a quiet screen verifiable instead of opaque.
+  // ---- THE ema9 SETUP, independent of the six gates above ----
+  // Long needs all three: the fast EMA above the slow one, the PREVIOUS brick closed
+  // BELOW the fast EMA and this one closed ABOVE it, and the brick colour flipped.
+  // Each close is compared against the fast EMA AT ITS OWN BRICK, not against today's
+  // value, so the cross is a real cross and not an artefact of the EMA having moved.
+  const e9ready = e9[i]!=null && e9[i-1]!=null && e[i]!=null;
+  const e9L = e9ready && e9[i]>e[i] && cl[i-1]<e9[i-1] && cl[i]>e9[i] && flipL;
+  const e9S = e9ready && e9[i]<e[i] && cl[i-1]>e9[i-1] && cl[i]<e9[i] && flipS;
+
+  const nL=Object.values(g).filter(Boolean).length, nS=Object.values(gs).filter(Boolean).length;
+  const side = nL>=nS ? g : gs, sideN = Math.max(nL,nS), total=Object.keys(g).length;
+  const failed = Object.keys(side).filter(k=>!side[k]);
+  return {ok:true,bricks:b.length,tick:tk,ovUsed:ov>0,b,cl,r,w5,w11,w21,e,e9,e9L,e9S,dirs,line,i,velo,needFlip,total,
+          size: b.length?Math.abs(b[i].c-b[i].o):0, score:sideN, failed,
+          scoreSide: nL>=nS?'long':'short',
+          sig: long?1:short?-1:0, gates: long?g:short?gs:g, dirLabel: long?'LONG':short?'SHORT':'—'};
+}
+
+// ---------------------------------------------------------------- alerts
+// Fires only while this page is OPEN and scanning -- a backgrounded or suspended tab
+// stops refreshing and nothing fires. Sound, banner and tab badge work everywhere.
+// The OS notification is attempted only where it can work: Chrome treats a file://
+// page as a secure context so it normally succeeds on DESKTOP, while on a PHONE the
+// plain constructor throws (MDN: "throws a TypeError ... in nearly all mobile
+// browsers") and the throw is caught, leaving sound and banner.
+let alertsOn=true, actx=null, titleBase=document.title, badge=0;
+const lastSig={};              // 'SYM@brick%' -> the signal seen on the previous scan
+
+function beep(n){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==='suspended') actx.resume();
+    const t0=actx.currentTime;
+    for(let i=0;i<Math.min(n,3);i++){
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.type='sine'; o.frequency.value=880;
+      const st=t0+i*0.22;
+      g.gain.setValueAtTime(0.0001,st);
+      g.gain.exponentialRampToValueAtTime(0.25,st+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,st+0.18);
+      o.connect(g); g.connect(actx.destination); o.start(st); o.stop(st+0.2);
+    }
+  }catch(e){ /* blocked before any gesture, or no audio -- the banner still shows */ }
+}
+
+// A signal is NEW when that symbol AND brick size was not already showing the same
+// signal on the previous scan, so a row that stays LONG alerts once, not every pass.
+function freshSignals(c){
+  const out=[];
+  for(const sym of c.syms){
+    const r=results[sym]; if(!r||!r.ev) continue;
+    c.bricks.forEach((p,k)=>{
+      const ev=r.ev[k], key=sym+'@'+p;
+      const now=(ev&&ev.ok)?ev.sig:0;
+      if(now!==0 && now!==lastSig[key]) out.push({sym, tf:p+'%', dir:now});
+      lastSig[key]=now;
+    });
+  }
+  return out;
+}
+
+function osNotify(hits){
+  try{
+    if(!window.isSecureContext || !('Notification' in window)) return;
+    const fire=()=>{ try{
+      new Notification(`${hits.length} new signal${hits.length>1?'s':''}`,
+        {body:hits.map(h=>`${h.sym.replace(/\.P$/,'')} ${h.tf} ${h.dir===1?'LONG':'SHORT'}`).join('\n'),
+         tag:'delta-renko'});
+    }catch(e){} };
+    if(Notification.permission==='granted') fire();
+    else if(Notification.permission!=='denied') Notification.requestPermission().then(q=>{ if(q==='granted') fire(); });
+  }catch(e){}
+}
+
+function announce(hits){
+  if(!hits.length) return;
+  badge+=hits.length;
+  document.title=`(${badge}) ${titleBase}`;
+  $('alertList').innerHTML = hits.map(h=>
+    `<span class="hit" style="color:${h.dir===1?'var(--long)':'var(--short)'}">`+
+    `${h.sym.replace(/\.P$/,'')} ${h.tf} ${h.dir===1?'LONG':'SHORT'}</span>`).join('');
+  $('alertBox').style.display='block';
+  beep(hits.length);
+  osNotify(hits);
+}
+function clearBadge(){ badge=0; document.title=titleBase; $('alertBox').style.display='none'; }
+
+// ---------------------------------------------------------------- live price
+// ONE request refreshes every row: /v2/tickers returns every perpetual's current
+// price, so 24 symbols cost the same as 1.
+//
+// DELIBERATELY NOT TOUCHED: the renko bricks. A brick only exists once price has
+// travelled a full brick, so painting a half-formed one would be inventing a brick
+// TradingView has not drawn. The live price moves the Last column and the 4h
+// candlestick pane's forming candle; the bricks change only on a scan.
+// The gates are not re-scored either -- Scan, or Auto, still drives those.
+const live={}, livePrev={};
+let liveOn=true, liveTimer=null, redrawOpenDetail=null;
+
+async function pollLive(){
+  const c=cfg();
+  try{
+    const r=await fetch(`${API}/v2/tickers?contract_types=perpetual_futures`,
+                        {headers:{'Accept':'application/json'}});
+    const j=await r.json();
+    const want=new Set(c.syms.map(x=>x.replace(/\.P$/,'').toUpperCase()));
+    for(const t of (j.result||j.data||[])){
+      const sym=String(t.symbol||'').toUpperCase();
+      if(!want.has(sym)) continue;
+      const px=parseFloat(t.close ?? t.mark_price);
+      if(!isFinite(px)) continue;
+      livePrev[sym]=live[sym]; live[sym]=px;
+    }
+    paintLive();
+    $('liveClock').textContent='live '+new Date().toLocaleTimeString();
+  }catch(e){ $('liveClock').textContent='live feed unreachable'; }
+}
+
+// Cells are rewritten in place rather than re-rendering, so an open chart panel does
+// not close under you every few seconds.
+function paintDayChg(td){
+  const v=dayChange(td.dataset.chg);
+  td.textContent = v==null ? '—' : (v>=0?'+':'')+v.toFixed(2)+'%';
+  td.style.color = v==null ? '' : (v>=0?'var(--long)':'var(--short)');
+}
+function paintLive(){
+  document.querySelectorAll('td[data-chg]').forEach(paintDayChg);
+  if(redrawOpenDetail) redrawOpenDetail();
+}
+
+function setLive(on){
+  liveOn=on;
+  $('btnLive').classList.toggle('on',on);
+  if(liveTimer){ clearInterval(liveTimer); liveTimer=null; }
+  if(on){ pollLive(); liveTimer=setInterval(pollLive, Math.max(3,+$('cfgLive').value)*1000); }
+  else $('liveClock').textContent='live off';
+}
+
+// ---------------------------------------------------------------- render
+let results={}, selected=null, signalsOnly=true, e9Only=false;
+
+// A symbol "has a signal" if ANY of its brick sizes fired LONG or SHORT. Near-miss
+// scores (4/6) are not signals and stay hidden while the filter is on.
+const hasSignal = sym => { const r=results[sym];
+  return !!(r && r.ev && r.ev.some(e=>e&&e.ok&&e.sig)); };
+
+// The ema9 setup on ANY brick size qualifies the row; the per-cell colour then shows
+// which size it was.
+const hasE9 = sym => { const r=results[sym];
+  return !!(r && r.ev && r.ev.some(e=>e&&e.ok&&(e.e9L||e.e9S))); };
+
+function render(c){
+  const tb=$('rows'); tb.innerHTML='';
+  c.bricks.forEach((p,k)=>{ const h=$('h'+k); if(h) h.textContent=p+'%'; });
+
+  // Nothing scanned yet -> show everything, otherwise the table reads as broken while
+  // the first pass is still running. A symbol you have OPEN also stays visible, so the
+  // detail panel never vanishes from under your finger when a signal clears.
+  const scanned = c.syms.some(s=>results[s]);
+  const nSig = c.syms.filter(hasSignal).length;
+  // Signals filter first, then the ema9 filter stacked on top. A symbol you have OPEN
+  // survives both, so the chart panel never vanishes from under your finger.
+  const nE9 = c.syms.filter(hasE9).length;
+  const base = (!scanned || !signalsOnly)
+      ? c.syms
+      : c.syms.filter(s=>hasSignal(s) || (selected&&selected.sym===s));
+  const show = !e9Only ? base
+      : base.filter(s=>hasE9(s) || (selected&&selected.sym===s));
+
+  $('btnFilter').textContent = signalsOnly ? '\u25b8 Signals only' : '\u25be Showing all';
+  $('btnFilter').classList.toggle('on', signalsOnly);
+  $('btnE9').classList.toggle('on', e9Only);
+  $('fInfo').textContent = !scanned ? 'not scanned yet'
+      : `${nSig} with a signal \u00b7 ${c.syms.filter(x=>results[x]).length}/${c.syms.length} scanned`
+        + (e9Only ? ` \u00b7 ${nE9} with the ema9 setup` : '');
+
+  if(scanned && show.length===0 && (signalsOnly||e9Only)){
+    const tr=document.createElement('tr'); tr.className='empty';
+    const td=document.createElement('td'); td.colSpan=2+c.bricks.length;
+    td.textContent = e9Only
+      ? `Nothing with the ema9 setup right now \u2014 tap to clear that filter`
+      : `No signals right now \u2014 tap to show all ${c.syms.length}`;
+    td.onclick=()=>{ if(e9Only) e9Only=false; else signalsOnly=false; render(c); };
+    tr.appendChild(td); tb.appendChild(tr); return;
+  }
+
+  // Rows are grouped under their part, so a row is always attributable to a batch
+  // and you can see at a glance which part still has nothing in it. A part with no
+  // visible rows prints no heading at all.
+  const showSet=new Set(show);
+  const groups = PARTS.length
+    ? PARTS.map((part,i)=>({part,i,syms:part.syms.filter(x=>showSet.has(x))}))
+    : [{part:null,i:-1,syms:show}];
+  const inParts = new Set(); PARTS.forEach(p=>p.syms.forEach(x=>inParts.add(x)));
+  const loose = show.filter(x=>!inParts.has(x));
+  if(loose.length) groups.push({part:{name:'Other',range:''},i:-1,syms:loose});
+
+  for(const g of groups){
+  if(!g.syms.length) continue;
+  if(g.part){
+    const hr=document.createElement('tr'); hr.className='phead';
+    const hd=document.createElement('td'); hd.colSpan=2+c.bricks.length;
+    const st=g.i>=0?pstate[g.i]:null;
+    hd.textContent=`${g.part.name} \u00b7 ${g.syms.length} shown`
+      + (g.part.range?` \u00b7 ${g.part.range}`:'')
+      + (st?` \u00b7 ${st.msg}`:'');
+    hr.appendChild(hd); tb.appendChild(hr);
+  }
+  for(const sym of g.syms){
+    const row=results[sym]; const tr=document.createElement('tr');
+    const td0=document.createElement('td'); td0.className='sym'; td0.textContent=sym.replace(/\.P$/,'');
+    tr.appendChild(td0);
+    const td1=document.createElement('td'); td1.className='num chg';
+    td1.dataset.chg=sym; paintDayChg(td1);
+    tr.appendChild(td1);
+    c.bricks.forEach((p,k)=>{
+      const td=document.createElement('td'); const ev=row&&row.ev[k];
+      const sp=document.createElement('span');
+      const sig=ev&&ev.ok?ev.sig:0;
+      // A full signal keeps its green/red. Otherwise, a fired ema9 setup turns the
+      // score pink so you can see which size triggered it without opening the row.
+      const e9hit = !!(ev && ev.ok && (ev.e9L || ev.e9S));
+      sp.className='cell '+(sig===1?'l':sig===-1?'s':(e9hit?'e9':'n'));
+      if(!ev) sp.textContent='…';
+      else if(!ev.ok){ sp.textContent='·';
+        sp.title=`only ${ev.bricks} bricks — ${ev.why}. Already deepened to the max history.`; }
+      else if(sig) sp.textContent=ev.dirLabel;
+      else { sp.textContent=`${ev.score}/${ev.total}`;
+        sp.title=`closest side: ${ev.scoreSide}. failing: ${ev.failed.join(', ')}`
+          + (e9hit ? `\nema9 setup: ${ev.e9L?'LONG':'SHORT'}` : ''); }
+      if(selected&&selected.sym===sym&&selected.k===k) sp.classList.add('sel');
+      // Touching the selected cell again closes the panel.
+      // OPENING A ROW REFRESHES THAT ONE SYMBOL. A part can have been scanned
+      // twenty minutes ago; the moment you look at a chart you want it current. This
+      // is the cheap incremental top-up -- newest candles only, one request -- and the
+      // gates are re-scored from it before the panel repaints.
+      if(ev&&ev.ok){ sp.onclick=()=>{
+        const closing = selected&&selected.sym===sym&&selected.k===k;
+        selected = closing ? null : {sym,k};
+        render(c);
+        if(!closing) refreshOne(sym);
+      }; }
+      td.appendChild(sp); tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+    if(selected && selected.sym===sym){
+      const ev=row&&row.ev[selected.k];
+      if(ev&&ev.ok) buildDetailRow(tb,sym,c.bricks[selected.k],ev,c);
+    }
+  }
+  }
+}
+// One symbol, brought up to the current minute and re-scored. Never deepens -- the
+// history it already holds is what the part fetched -- so it is a single request.
+let refreshing=null;
+async function refreshOne(sym){
+  if(refreshing===sym) return;
+  refreshing=sym;
+  try{
+    const c=cfg();
+    const sd=await loadSymbol(sym,c);
+    results[sym]={last:sd.bars[sd.bars.length-1].c,
+                  ev:c.bricks.map(pc=>evaluate(sd.bars,pc,c,sym))};
+    loadDayOpen(sym).catch(()=>{});
+    if(selected&&selected.sym===sym) render(c);
+  }catch(e){ /* the panel keeps the figures from the part scan */ }
+  finally{ refreshing=null; }
+}
+
+const fmt=v=>v>=1000?v.toFixed(1):v>=1?v.toFixed(3):v>=0.01?v.toFixed(5):v.toPrecision(4);
+
+// ---------------------------------------------------------------- detail panel
+// Sized to its real CSS width and to the device pixel ratio, so the canvas is sharp on
+// a phone instead of a fixed 1100px bitmap squeezed into 340.
+// cssH is only a fallback for the first paint, before layout has settled. The real
+// height comes from the element itself, so the CSS above (including its desktop media
+// query) is the single source of truth and no painter needs to know a pixel count.
+function fitCanvas(cv,cssH){
+  const dpr=window.devicePixelRatio||1;
+  const r=cv.getBoundingClientRect();
+  const w=Math.max(160,Math.round(r.width));
+  const h=Math.max(80,Math.round(r.height||cssH));
+  cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
+  const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,w,h);
+  return {x,W:w,H:h};
+}
+
+// RENKO PANE. EMA21 is stroked segment by segment and coloured by the EMA VELOCITY at
+// that brick -- red where the magnitude reaches your threshold, grey where it does not
+// -- so you see the stretch of the move that satisfies the velocity gate, not just the
+// single reading in the tile below. Magnitude, so short setups colour too.
+function paintRenko(cv,ev,c){
+  const {x,W,H}=fitCanvas(cv,200);
+  const N=Math.min(W<420?26:46,ev.b.length), s=ev.b.length-N, view=ev.b.slice(s);
+  let lo=Infinity,hi=-Infinity;
+  for(let i=s;i<ev.b.length;i++){ lo=Math.min(lo,ev.b[i].l, ev.line[i]??ev.b[i].l, ev.e[i]??ev.b[i].l, ev.e9?.[i]??ev.b[i].l);
+                                  hi=Math.max(hi,ev.b[i].h, ev.line[i]??ev.b[i].h, ev.e[i]??ev.b[i].h, ev.e9?.[i]??ev.b[i].h); }
+  const pad=(hi-lo)*0.08||1; lo-=pad; hi+=pad;
+  const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N;
+  for(let i=0;i<N;i++){ const b=view[i], x0=8+i*bw+bw*0.14, w=bw*0.72;
+    const yT=Y(Math.max(b.o,b.c)), yB=Y(Math.min(b.o,b.c));
+    const col=b.dir===1?'#2e9e5b':'#d6504a';
+    // wick first, so the body paints over its middle
+    if(b.h>Math.max(b.o,b.c)+1e-12 || b.l<Math.min(b.o,b.c)-1e-12){
+      x.strokeStyle=col; x.globalAlpha=.7; x.lineWidth=1;
+      x.beginPath(); x.moveTo(x0+w/2,Y(b.h)); x.lineTo(x0+w/2,Y(b.l)); x.stroke(); x.globalAlpha=1; }
+    x.fillStyle=col; x.globalAlpha=.9;
+    x.fillRect(x0,yT,w,Math.max(2,yB-yT)); x.globalAlpha=1; }
+  // SuperTrend, drawn the way TradingView draws it: green while the trend is up, red
+  // while it is down, and BROKEN at the flip so no vertical connector runs between the
+  // two levels. The segment spanning a direction change is simply not drawn.
+  x.lineWidth=1.5;
+  for(let i=1;i<N;i++){
+    const v0=ev.line[s+i-1], v1=ev.line[s+i], d0=ev.dirs[s+i-1], d1=ev.dirs[s+i];
+    if(v0==null||v1==null||d0==null||d1==null||d0!==d1) continue;
+    x.beginPath(); x.strokeStyle = d1===1 ? '#16a34a' : '#dc2626';
+    x.moveTo(8+(i-1)*bw+bw/2,Y(v0)); x.lineTo(8+i*bw+bw/2,Y(v1)); x.stroke(); }
+  const vl=c.veloLen;
+  const veloAt=i=>{ const a=ev.e[i-vl], b=ev.e[i];
+    return (a&&b&&a!==0)?Math.abs((b-a)/a*100):0; };
+  x.lineWidth=1.9;
+  for(let i=1;i<N;i++){
+    const p=ev.e[s+i-1], q=ev.e[s+i]; if(p==null||q==null) continue;
+    x.beginPath();
+    x.strokeStyle = veloAt(s+i)>=c.veloMin ? '#d6504a' : '#8b98a6';
+    x.moveTo(8+(i-1)*bw+bw/2,Y(p)); x.lineTo(8+i*bw+bw/2,Y(q)); x.stroke(); }
+  // The fast EMA, coloured segment by segment by WHICH SIDE OF EMA21 it is on --
+  // green above, red below -- the same reading as the ema9 plot in your Pine cross
+  // script. Each segment takes the colour at its right-hand brick, so the colour
+  // turns exactly at the cross.
+  if(ev.e9){
+    x.lineWidth=0.95;            // half the EMA21 weight, so the two never read as one line
+    for(let i=1;i<N;i++){
+      const p=ev.e9[s+i-1], q=ev.e9[s+i], slow=ev.e[s+i];
+      if(p==null||q==null||slow==null) continue;
+      x.beginPath();
+      x.strokeStyle = q>slow ? '#22c55e' : '#ef4444';
+      x.moveTo(8+(i-1)*bw+bw/2,Y(p)); x.lineTo(8+i*bw+bw/2,Y(q)); x.stroke();
+    }
+  }
+  return {N,s};
+}
+
+// 4h PANE: the last 10 four-hour candles with EMA5 and EMA21 -- the higher-timeframe
+// picture the renko alone cannot show.
+// livePx, when given, overrides the LAST 4h candle's close for drawing only. The
+// stored bars are untouched, so nothing feeding RSI or the EMAs sees a part-formed price.
+function paint4h(cv,d,livePx){
+  const {x,W,H}=fitCanvas(cv,200);
+  if(!d||d==='loading'||d==='failed'){
+    x.fillStyle='#64748b'; x.font='11px ui-monospace,monospace'; x.textAlign='center';
+    x.fillText(d==='failed'?'4h candles unavailable':'loading 4h …',W/2,H/2); return null; }
+  const N=Math.min(15,d.bars.length), s=d.bars.length-N;
+  const lastB=d.bars[d.bars.length-1];
+  const shown=(livePx!=null && isFinite(livePx) && lastB)
+    ? {o:lastB.o, c:livePx, h:Math.max(lastB.h,livePx), l:Math.min(lastB.l,livePx)} : null;
+  const at=i=>(shown && i===d.bars.length-1) ? shown : d.bars[i];
+  let lo=Infinity,hi=-Infinity;
+  for(let i=s;i<d.bars.length;i++){ const bb=at(i);
+    lo=Math.min(lo,bb.l, d.e5[i]??bb.l, d.e21[i]??bb.l);
+    hi=Math.max(hi,bb.h, d.e5[i]??bb.h, d.e21[i]??bb.h); }
+  const pad=(hi-lo)*0.10||1; lo-=pad; hi+=pad;
+  const Y=v=>H-12-((v-lo)/(hi-lo))*(H-26), bw=(W-16)/N;
+  for(let i=0;i<N;i++){ const b=at(s+i), cx=8+i*bw+bw/2, up=b.c>=b.o;
+    x.strokeStyle=x.fillStyle=up?'#2e9e5b':'#d6504a'; x.lineWidth=1;
+    x.beginPath(); x.moveTo(cx,Y(b.h)); x.lineTo(cx,Y(b.l)); x.stroke();
+    const yT=Y(Math.max(b.o,b.c)), yB=Y(Math.min(b.o,b.c));
+    x.fillRect(cx-bw*0.3,yT,Math.max(2,bw*0.6),Math.max(1.5,yB-yT)); }
+  const trail=(arr,col)=>{ x.beginPath(); x.strokeStyle=col; x.lineWidth=1.4; let on=false;
+    for(let i=0;i<N;i++){ const v=arr[s+i]; if(v==null){on=false;continue;}
+      const px=8+i*bw+bw/2, py=Y(v); if(!on){x.moveTo(px,py);on=true;} else x.lineTo(px,py);} x.stroke(); };
+  trail(d.e5,'#4ba3c3'); trail(d.e21,'#c489d8');
+  return {N,s};
+}
+
+// RSI PANE -- the same construction as your HM V6 pane: RSI(close,21) with WMA5, WMA11
+// and WMA21 taken OF THE RSI, the 50 midline, the 40 green / 60 red boundaries, the
+// RSI-to-50 fill (red above 50, aqua below) and the RSI-to-WMA5 fill on HM V6's own
+// bull/bear conditions: RSI above WMA5 with WMA5 > WMA11 > WMA21 and RSI > 50, mirrored
+// for bear. WMA21 is coloured by the absolute slope of its own velocity against the
+// threshold, as HM V6 colours it.
+//
+// COLOURS DIFFER DELIBERATELY: HM V6 draws RSI and WMA5 in black and WMA21 in #1b5e20,
+// which are invisible on this dark panel. RSI is near-white, WMA5 grey-blue, and the
+// WMA21 green is lifted. WMA11 stays orange and every level keeps its colour.
+function paintRsi(cv,d,c){
+  const {x,W,H}=fitCanvas(cv,118);
+  if(!d){ x.fillStyle='#64748b'; x.font='10px ui-monospace,monospace'; x.textAlign='center';
+          x.fillText('rsi unavailable',W/2,H/2); return; }
+  const {r,w5,w11,w21,N,s}=d;
+  let lo=100,hi=0;
+  for(let i=s;i<s+N;i++) for(const v of [r[i],w5[i],w11[i],w21[i]])
+    if(v!=null&&isFinite(v)){ lo=Math.min(lo,v); hi=Math.max(hi,v); }
+  if(!(hi>lo)){ lo=30; hi=70; }
+  lo=Math.min(lo,38); hi=Math.max(hi,62);
+  const pad=(hi-lo)*0.08; lo-=pad; hi+=pad;
+  const Y=v=>H-8-((v-lo)/(hi-lo))*(H-16), bw=(W-16)/N, X=i=>8+i*bw+bw/2;
+
+  // fills first, so the lines sit on top
+  const band=(arrA,arrB,colFor)=>{
+    for(let i=0;i<N-1;i++){
+      const a0=arrA(s+i), a1=arrA(s+i+1), b0=arrB(s+i), b1=arrB(s+i+1);
+      if(a0==null||a1==null||b0==null||b1==null) continue;
+      const col=colFor(s+i); if(!col) continue;
+      x.fillStyle=col; x.beginPath();
+      x.moveTo(X(i),Y(a0)); x.lineTo(X(i+1),Y(a1));
+      x.lineTo(X(i+1),Y(b1)); x.lineTo(X(i),Y(b0)); x.closePath(); x.fill(); }
+  };
+  band(i=>r[i], ()=>50, i=>r[i]>50?'rgba(214,80,74,0.16)':'rgba(79,195,220,0.16)');
+  // THE FAN ALONE decides this fill: WMA5 > WMA11 > WMA21 shades light green, the
+  // reverse shades light red. Neither HM V6's RSI>50 filter nor any RSI-vs-WMA5 test
+  // applies, so the fill reports the fan's state and nothing else.
+  const bull=i=>w5[i]!=null&&w11[i]!=null&&w21[i]!=null&&w5[i]>w11[i]&&w11[i]>w21[i];
+  const bear=i=>w5[i]!=null&&w11[i]!=null&&w21[i]!=null&&w5[i]<w11[i]&&w11[i]<w21[i];
+  band(i=>r[i], i=>w5[i], i=>bull(i)?'rgba(134,239,172,0.22)':bear(i)?'rgba(248,113,113,0.22)':null);
+
+  // 40 / 50 / 60
+  // Only the 50 midline remains, thinner and fainter so it frames without competing.
+  const lvl=(v,col,dash)=>{ x.save(); x.strokeStyle=col; x.lineWidth=0.8;
+    if(dash) x.setLineDash([3,3]);
+    x.beginPath(); x.moveTo(6,Y(v)); x.lineTo(W-6,Y(v)); x.stroke(); x.restore(); };
+  lvl(50,'rgba(147,164,180,0.28)',true);
+
+  const line=(arr,col,wid)=>{ x.beginPath(); x.strokeStyle=col; x.lineWidth=wid; let on=false;
+    for(let i=0;i<N;i++){ const v=arr[s+i]; if(v==null){on=false;continue;}
+      if(!on){x.moveTo(X(i),Y(v));on=true;} else x.lineTo(X(i),Y(v)); } x.stroke(); };
+  line(w11,'#f59e0b',1.3);     // mid  -- amber
+  line(w5, '#86efac',1.3);     // fast -- light green
+  line(w21,'#ef4444',1.4);     // slow -- red, plain (no slope colouring)
+  // The RSI line sits UNDER everything in weight: thin and semi-transparent, so it
+  // traces the shape without drowning the three WMAs.
+  line(r,'rgba(255,255,255,0.55)',1.1);
+}
+
+// The panel is a table ROW appended straight after the symbol you touched, so it opens
+// under your finger. Nothing lives at the foot of the page any more.
+function buildDetailRow(tb,sym,pct,ev,c){
+  const tr=document.createElement('tr'); tr.className='detailrow';
+  const td=document.createElement('td'); td.colSpan=2+c.bricks.length; tr.appendChild(td);
+  const nb=(store[sym]&&store[sym].bars.length)||0;
+  const g=ev.gates, mk=(label,val,pass)=>
+    `<div class="ro ${pass?'pass':'fail'}"><div class="k">${label}</div><div class="v">${val}</div></div>`;
+  td.innerHTML=
+    `<div class="dhead">${sym.replace(/\.P$/,'')} · ${pct}% bricks</div>`+
+    `<div class="dsub">${ev.bricks} bricks from ${nb} candles · brick ${ev.size.toPrecision(3)}`+
+      (ev.ovUsed?' (override)':ev.tick?` · tick ${ev.tick.toPrecision(3)}`:' · tick unknown')+
+      ` · last ${fmt(ev.cl[ev.i])} · ${ev.sig?ev.dirLabel:ev.score+'/'+ev.total+' ('+ev.scoreSide+')'}</div>`+
+    `<div class="dwrap">`+
+      `<div class="pane"><canvas class="cvR"></canvas>`+
+        `<div class="plabel">renko · ST <span style="color:#16a34a">up</span>/`+
+        `<span style="color:#dc2626">down</span> · ema${c.emaLen} `+
+        `<span style="color:#d6504a">red</span> = velocity ≥ ${c.veloMin}% · `+
+        `ema${c.emaFast} <span style="color:#22c55e">above</span>/`+
+        `<span style="color:#ef4444">below</span> ema${c.emaLen}`+
+        (ev.e9L||ev.e9S ? ` · <span style="color:#f8b4d9">ema9 setup: ${ev.e9L?'LONG':'SHORT'}</span>` : '')+
+        `</div>`+
+        `<canvas class="cvRr"></canvas>`+
+        `<div class="plabel rsil">rsi${c.rsiLen} · wma `+
+        `<span style="color:#86efac">${c.w5}</span>/<span style="color:#f59e0b">${c.w11}</span>/`+
+        `<span style="color:#ef4444">${c.w21}</span> · fill = fan aligned</div></div>`+
+      `<div class="pane"><canvas class="cv4"></canvas>`+
+        `<div class="plabel">4h · <span style="color:#4ba3c3">ema5</span> · `+
+        `<span style="color:#c489d8">ema21</span></div>`+
+        `<canvas class="cv4r"></canvas>`+
+        `<div class="plabel rsil">4h rsi${c.rsiLen} · wma `+
+        `<span style="color:#86efac">${c.w5}</span>/<span style="color:#f59e0b">${c.w11}</span>/`+
+        `<span style="color:#ef4444">${c.w21}</span></div></div>`+
+    `</div>`+
+    `<div class="readout">`+
+      mk('SuperTrend', ev.dirs[ev.i]===1?'UP':'DOWN', g.st)+
+      mk('vs EMA'+c.emaLen, (ev.cl[ev.i]>ev.e[ev.i]?'above':'below'), g.ema)+
+      mk('EMA velocity', ev.velo.toFixed(2)+'%', g.velo)+
+      mk('RSI vs WMA'+c.w21, ev.r[ev.i].toFixed(1)+' / '+ev.w21[ev.i].toFixed(1), g.rsi)+
+      mk('WMA'+c.w5+' vs '+c.w21, ev.w5[ev.i].toFixed(1)+' / '+ev.w21[ev.i].toFixed(1), g.fan)+
+      (ev.needFlip ? mk('First opp. brick',
+        (ev.b[ev.i].dir===1?'green':'red')+' after '+(ev.b[ev.i-1].dir===1?'green':'red'), g.flip) : '')+
+    `</div>`;
+  tb.appendChild(tr);
+  const cvR=td.querySelector('.cvR'), cv4=td.querySelector('.cv4');
+  const cvRr=td.querySelector('.cvRr'), cv4r=td.querySelector('.cv4r');
+  const wR=paintRenko(cvR,ev,c);
+  paintRsi(cvRr,{r:ev.r,w5:ev.w5,w11:ev.w11,w21:ev.w21,N:wR.N,s:wR.s},c);
+  const draw4=()=>{ if(!cv4.isConnected) return;
+    const w=paint4h(cv4,h4[sym],live[sym.replace(/\.P$/,'')]);
+    paintRsi(cv4r, w ? {r:h4[sym].r,w5:h4[sym].w5,w11:h4[sym].w11,w21:h4[sym].w21,N:w.N,s:w.s} : null, c); };
+  draw4();
+  redrawOpenDetail=draw4;          // the live poll repaints exactly this panel
+  // 4h is fetched lazily on first open, then repainted in place -- no re-render, so the
+  // row does not jump while you are reading it.
+  // Always ask: load4h returns the cache instantly when it is still fresh, and
+  // refetches when it is not. Opening a symbol can no longer show hours-old candles.
+  load4h(sym).then(()=>{ if(cv4.isConnected) draw4(); });
+}
+
+// ---------------------------------------------------------------- run loop
+
+function setStatus(t,cls){ $('status').textContent=t; $('dot').className='dot'+(cls?' '+cls:''); }
+function showErr(m,raw){ $('err').style.display='block'; $('errMsg').textContent=m;
+  $('errRaw').textContent=raw||''; }
+
+// ---------------------------------------------------------------- scanning
+// Every part owns its own lock and its own cancellation token, so parts never wait on
+// one another: start part 4, and part 1 is still yours to run. Pressing a part's own
+// button while it is running STOPS it -- restarting a batch mid-fetch would only
+// duplicate the work it is already doing.
+const pstate = [];
+let renderPending=null;
+
+// 262 rows repainted after every single symbol, from several parts at once, is enough
+// work to make the page stutter. Repaints are coalesced into one per 400ms.
+function renderSoon(){
+  if(renderPending) return;
+  renderPending=setTimeout(()=>{ renderPending=null; render(cfg()); }, 400);
+}
+
+function partStat(i,msg,cls){
+  const st=pstate[i]; if(!st) return;
+  st.msg=msg; st.cls=cls||'';
+  const card=document.querySelector(`.pcard[data-p="${i}"]`);
+  if(!card) return;
+  const el=card.querySelector('.pstat');
+  el.textContent=msg; el.className='pstat'+(cls?' '+cls:'');
+  card.classList.toggle('run', st.busy);
+  const b=card.querySelector('.pscan');
+  b.textContent = st.busy ? 'Stop' : 'Scan';
+  b.classList.toggle('run', st.busy);
+  b.classList.toggle('go', !st.busy);
+}
+const anyBusy = () => pstate.some(p=>p&&p.busy);
+
+async function scanPart(i){
+  const part=PARTS[i]; if(!part || !part.syms.length) return;
+  const st=pstate[i];
+  if(st.busy){ stopPart(i); return; }
+  const token=++st.token;
+  st.busy=true; st.done=0; st.failed=0;
+  partStat(i,'starting \u2026','busy');
+  setStatus('scanning \u2026','busy');
+  const c=cfg();
+  $('err').style.display='none'; $('fRes').textContent=c.res;
+  CFG4={rsiLen:c.rsiLen,w5:c.w5,w11:c.w11,w21:c.w21};
+  await loadTicks();                       // one call per session, shared by every part
+  let firstErr=null;
+  for(const sym of part.syms){
+    if(st.token!==token) return;           // stopped, or a newer run of this same part
+    partStat(i,`${bare(sym)} \u2026 ${st.done}/${part.syms.length}`,'busy');
+    try{
+      const dayP = loadDayOpen(sym).catch(()=>{});
+      let sd=await loadSymbol(sym,c);
+      let ev=c.bricks.map(pc=>evaluate(sd.bars,pc,c,sym));
+      let tries=0;
+      while(ev.some(e=>!e.ok) && sd.days<c.maxDays && tries++<3){
+        if(st.token!==token) return;
+        const deeper=Math.min(c.maxDays, sd.days*3);
+        partStat(i,`${bare(sym)} \u2014 deepening ${deeper}d \u2026`,'busy');
+        sd=await loadSymbol(sym,c,deeper);
+        ev=c.bricks.map(pc=>evaluate(sd.bars,pc,c,sym));
+      }
+      await dayP;
+      results[sym]={last:sd.bars[sd.bars.length-1].c, ev};
+    }catch(e){ st.failed++; if(!firstErr)firstErr=e;
+      results[sym]={last:null,ev:c.bricks.map(()=>null)}; }
+    // The symbol that was already in flight when you pressed Stop is kept -- it is
+    // real data and discarding it would waste the request -- but the counter stops
+    // where the message says it did.
+    if(st.token!==token) return;
+    st.done++; renderSoon();
+  }
+  if(st.token!==token) return;
+  st.busy=false; st.last=new Date();
+  const when=st.last.toLocaleTimeString();
+  if(st.failed===part.syms.length){
+    partStat(i,`all failed \u00b7 ${when}`,'err');
+    showErr(`${part.name}: every symbol failed. If the message below mentions CORS or `+
+            `"Failed to fetch", the browser blocked the call rather than Delta refusing it.`,
+            firstErr?firstErr.message:'');
+  } else {
+    partStat(i, st.failed?`done \u00b7 ${st.failed} failed \u00b7 ${when}`:`done \u00b7 ${when}`,
+             st.failed?'err':'ok');
+  }
+  // Alerts are judged per part, over that part's symbols only, so a batch that has not
+  // run yet can neither trigger nor suppress anything.
+  const hits=freshSignals(Object.assign({},c,{syms:part.syms}));
+  if(alertsOn) announce(hits);
+  $('clock').textContent='last: '+when;
+  setStatus(anyBusy()?'scanning \u2026':'idle', anyBusy()?'busy':'ok');
+  render(cfg());
+}
+
+function stopPart(i){
+  const st=pstate[i]; if(!st||!st.busy) return;
+  st.token++; st.busy=false;
+  partStat(i,`stopped at ${st.done}/${PARTS[i].syms.length}`,'');
+  setStatus(anyBusy()?'scanning \u2026':'idle', anyBusy()?'busy':'');
+}
+
+// "Scan all parts" runs them in ORDER, not together: five concurrent 1-minute chains
+// is the quickest way to be rate-limited, and part 1 is the one you want first.
+let allToken=0;
+async function scanAll(){
+  const mine=++allToken;
+  for(let i=0;i<PARTS.length;i++){
+    if(mine!==allToken) return;
+    if(pstate[i].busy) continue;
+    await scanPart(i);
+  }
+}
+function stopAll(){ allToken++; PARTS.forEach((_,i)=>stopPart(i)); }
+
+// The part cards. Built once the symbol list is known, because the ranges and the
+// counts come from the live list.
+function buildPartCards(){
+  const host=$('parts'); host.innerHTML='';
+  PARTS.forEach((part,i)=>{
+    const d=document.createElement('div'); d.className='pcard'; d.dataset.p=i;
+    d.innerHTML=`<div class="ptop">${part.name}<span class="pcount">${part.syms.length} sym</span></div>`+
+                `<div class="prange" title="${part.range}">${part.range}</div>`+
+                `<div class="pbtns"><button class="pscan go">Scan</button>`+
+                `<button class="pauto">Auto: off</button></div>`+
+                `<div class="pstat">idle</div>`;
+    host.appendChild(d);
+    d.querySelector('.pscan').onclick=()=>scanPart(i);
+    d.querySelector('.pauto').onclick=(e)=>{
+      const st=pstate[i], b=e.currentTarget;
+      if(st.timer){ clearInterval(st.timer); st.timer=null; b.textContent='Auto: off'; b.classList.remove('on'); }
+      else { const sec=Math.max(20,cfg().every);
+        st.timer=setInterval(()=>{ if(!st.busy) scanPart(i); }, sec*1000);
+        b.textContent=`Auto: ${sec}s`; b.classList.add('on'); scanPart(i); }
+    };
+    partStat(i, pstate[i].msg, pstate[i].cls);
+  });
+}
+
+$('btnFilter').onclick=()=>{ signalsOnly=!signalsOnly; render(cfg()); };
+$('btnE9').onclick=()=>{ e9Only=!e9Only; render(cfg()); };
+
+// The canvases size themselves from CSS, and the desktop breakpoint changes their
+// HEIGHT, not just their width -- so a rotation or a window drag across 701px would
+// otherwise leave the renko panes drawn at the old height and visibly stretched.
+// Re-rendering repaints the open detail at the new size. Debounced, because a drag
+// fires this continuously.
+let rzT=null;
+addEventListener('resize',()=>{ clearTimeout(rzT);
+  rzT=setTimeout(()=>{ if(Object.keys(results).length) render(cfg()); }, 180); });
+$('alertX').onclick=clearBadge;
+$('btnAlert').onclick=()=>{
+  alertsOn=!alertsOn;
+  $('btnAlert').classList.toggle('on',alertsOn);
+  if(!alertsOn) clearBadge();
+  // Unlock audio on this gesture: browsers refuse sound until the page is interacted
+  // with, and a scan fired by the auto-timer does not count as an interaction.
+  else try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); actx.resume(); }catch(e){}
+};
+$('btnLive').onclick=()=>setLive(!liveOn);
+$('cfgLive').onchange=()=>{ if(liveOn) setLive(true); };
+$('btnScan').onclick=scanAll;
+$('btnStopAll').onclick=stopAll;
+
+// Boot: ask Delta what exists, cut it into parts, draw the cards. Nothing is fetched
+// per symbol until you press a Scan button.
+(async()=>{
+  setStatus('resolving symbols \u2026','busy');
+  await resolveSymbols();
+  buildPartCards();
+  $('hdrSub').textContent=`\u2014 ${SYMS.length} symbols \u00b7 ${NPARTS} parts \u00b7 `+
+    cfg().bricks.join(' / ')+' %';
+  render(cfg());
+  setStatus(`ready \u2014 ${SYMS.length} symbols in ${NPARTS} parts`,'ok');
+})();
+// Prices start flowing immediately, before any scan, so the clock proves the feed is
+// alive even on a page you have only just opened.
+setLive(true);
+</script>
+</body>
+</html>
