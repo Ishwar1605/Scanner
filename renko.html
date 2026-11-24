@@ -47,7 +47,7 @@ button:disabled{opacity:.5;cursor:default}
 #alertBox .x{float:right;cursor:pointer;color:var(--faint);padding:0 4px}
 #alertBox .hit{display:inline-block;margin-right:10px}
 #liveClock{font-family:var(--mono);font-size:11px;color:var(--faint)}
-td[data-last]{transition:color .4s ease}
+td[data-chg]{transition:color .4s ease}
 #fInfo{font-family:var(--mono);font-size:11px;color:var(--faint)}
 tr.empty td{text-align:center;color:var(--faint);font-size:12px;padding:14px 8px;cursor:pointer}
 tr.empty td:hover{color:var(--fg)}
@@ -72,9 +72,8 @@ td.sym{font-family:var(--mono);font-weight:600;white-space:nowrap;text-align:lef
 th:first-child{text-align:left}
 td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--dim);
        white-space:nowrap}
-/* The bricks column was wrapping "159 / 78 / 36" onto three lines, which made EVERY row
-   three lines tall on a phone. nowrap plus a smaller face is most of the compaction. */
-td.bricks{font-size:11px;color:var(--faint)}
+/* Day % colours itself in paintDayChg, so no colour is set here. */
+td.chg{font-size:12px}
 tr:hover td{background:#19222c}
 .cell{display:inline-block;min-width:54px;text-align:center;padding:2px 7px;border-radius:4px;
       font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;border:1px solid transparent}
@@ -118,7 +117,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   th,td{padding:4px 4px;font-size:12px}
   th{font-size:10px;letter-spacing:.03em}
   .cell{min-width:40px;padding:2px 4px}
-  td.bricks{font-size:10px}
+  td.chg{font-size:11px}
   h1{font-size:15px}
   .wrap{padding-left:6px;padding-right:6px}
 }
@@ -172,7 +171,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
 <div class="fbar">
   <button id="btnFilter" class="on">▸ Signals only</button>
   <button id="btnAlert" class="atab on" title="Beep, show a banner and badge the tab title when a symbol turns LONG or SHORT at a brick size that was not signalling on the previous scan. Only fires while this page is open and scanning.">alerts</button>
-  <button id="btnLive" class="ltab on" title="Poll every symbol's current price in one request and update the Last column and the 4h chart's forming candle. The renko bricks are NOT redrawn - a brick only exists once price has moved a full brick - and the gates are not re-scored.">live</button>
+  <button id="btnLive" class="ltab on" title="Poll every symbol's current price in one request and update the Day % column and the 4h chart's forming candle. The renko bricks are NOT redrawn - a brick only exists once price has moved a full brick - and the gates are not re-scored.">live</button>
   <button id="btnE9" class="e9tab" title="Keep only symbols where the ema9 setup has fired: fast EMA above the slow one, the previous brick closed below the fast EMA and this one closed above it, and the brick colour flipped. Mirrored for shorts. Independent of the six gates - with Signals only also on, a row must satisfy both.">ema9</button>
   <span id="liveClock"></span>
   <span id="fInfo"></span>
@@ -180,7 +179,7 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
 
 <table>
   <thead><tr>
-    <th>Symbol</th><th>Last</th><th id="h0">0.75%</th><th id="h1">1.0%</th><th id="h2">1.5%</th><th>Bricks</th>
+    <th>Symbol</th><th>Day %</th><th id="h0">0.75%</th><th id="h1">1.0%</th><th id="h2">1.5%</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
@@ -191,8 +190,9 @@ footer{color:var(--faint);font-size:11px;margin-top:18px;line-height:1.6}
   <span style="color:var(--long)">LONG</span> / <span style="color:var(--short)">SHORT</span> — every condition agrees.
   &nbsp;·&nbsp; <b>4/6</b> — evaluated, that many conditions passed on its stronger side; hover to see which failed, click to open it.
   &nbsp;·&nbsp; <b>·</b> — still not enough bricks after deepening to max history; that symbol is simply too quiet for that brick size.
-  <br><b>Bricks column</b> — how many bricks exist at each size, in column order: 0.75% / 1% / 1.5%.
-  WMA21-of-RSI21 needs 44, so anything under that shows <b>·</b>. The scanner deepens history on its own until it has them.
+  <br><b>Day %</b> — today's move from the daily open, the same figure the candlestick scanner shows, refreshed with the live price.
+  <br><b>Brick counts</b> — no longer a column; the open detail's subtitle line gives the count for the size you are looking at.
+  WMA21-of-RSI21 needs 44 bricks, so anything under that shows <b>·</b>. The scanner deepens history on its own until it has them.
   <br><b>Brick size</b> — the percentage is applied to the last price, rounded to that symbol's minimum tick,
   then snapped to the nearest 1 / 1.5 / 2 / 2.5 × 10ⁿ step. Verified against BTC 450, ETH 15, XRP 0.0075,
   1000PEPE 0.00003, DOGS 0.0000002 and TradingView's own AAPL example. TradingView uses the price
@@ -458,6 +458,25 @@ async function fetchCandles(sym,res,startSec,endSec){
              .sort((a,b)=>a.t-b.t);
 }
 
+// DAY %, the same measure the candlestick scanner shows: today's move from the DAILY
+// OPEN, not a rolling 24h window. The renko feed cannot supply it -- bricks are built
+// from 1m candles and no daily bar is ever requested -- so this is one small extra
+// request per symbol per scan. Five days wide, and the newest bar in it is today.
+const dayOpen={};              // SYMBOL without .P -> today's 1d open
+async function loadDayOpen(sym){
+  const now=Math.floor(Date.now()/1000);
+  const rows=await fetchCandles(sym,'1d',now-5*86400,now);
+  if(rows.length) dayOpen[sym.replace(/\.P$/,'').toUpperCase()]=rows[rows.length-1].o;
+}
+// Live price when the poll has one, otherwise the last brick-feed close, so the figure
+// is still right with live off.
+function dayChange(sym){
+  const k=sym.replace(/\.P$/,'').toUpperCase(), o=dayOpen[k];
+  const px = live[k] ?? (results[sym] && results[sym].last);
+  if(!o || !isFinite(o) || px==null || !isFinite(px)) return null;
+  return (px-o)/o*100;
+}
+
 // Deep load once, then only the newest candles on every later pass. Delta caps a single
 // request, so the first load is paged backwards in chunks.
 async function loadSymbol(sym,c,wantDays){
@@ -690,14 +709,13 @@ async function pollLive(){
 
 // Cells are rewritten in place rather than re-rendering, so an open chart panel does
 // not close under you every few seconds.
+function paintDayChg(td){
+  const v=dayChange(td.dataset.chg);
+  td.textContent = v==null ? '—' : (v>=0?'+':'')+v.toFixed(2)+'%';
+  td.style.color = v==null ? '' : (v>=0?'var(--long)':'var(--short)');
+}
 function paintLive(){
-  document.querySelectorAll('td[data-last]').forEach(td=>{
-    const sym=td.dataset.last, px=live[sym];
-    if(px==null) return;
-    td.textContent=fmt(px);
-    const was=livePrev[sym];
-    td.style.color = (was==null||px===was) ? '' : (px>was?'var(--long)':'var(--short)');
-  });
+  document.querySelectorAll('td[data-chg]').forEach(paintDayChg);
   if(redrawOpenDetail) redrawOpenDetail();
 }
 
@@ -749,7 +767,7 @@ function render(c){
 
   if(scanned && show.length===0 && (signalsOnly||e9Only)){
     const tr=document.createElement('tr'); tr.className='empty';
-    const td=document.createElement('td'); td.colSpan=3+c.bricks.length;
+    const td=document.createElement('td'); td.colSpan=2+c.bricks.length;
     td.textContent = e9Only
       ? `Nothing with the ema9 setup right now \u2014 tap to clear that filter`
       : `No signals right now \u2014 tap to show all ${c.syms.length}`;
@@ -761,10 +779,8 @@ function render(c){
     const row=results[sym]; const tr=document.createElement('tr');
     const td0=document.createElement('td'); td0.className='sym'; td0.textContent=sym.replace(/\.P$/,'');
     tr.appendChild(td0);
-    const td1=document.createElement('td'); td1.className='num';
-    td1.dataset.last=sym.replace(/\.P$/,'');
-    const lp=live[td1.dataset.last];
-    td1.textContent = lp!=null ? fmt(lp) : (row&&row.last!=null?fmt(row.last):'—');
+    const td1=document.createElement('td'); td1.className='num chg';
+    td1.dataset.chg=sym; paintDayChg(td1);
     tr.appendChild(td1);
     c.bricks.forEach((p,k)=>{
       const td=document.createElement('td'); const ev=row&&row.ev[k];
@@ -787,8 +803,6 @@ function render(c){
         selected=(selected&&selected.sym===sym&&selected.k===k)?null:{sym,k}; render(c); }; }
       td.appendChild(sp); tr.appendChild(td);
     });
-    const td5=document.createElement('td'); td5.className='num bricks';
-    td5.textContent=row?row.ev.map(e=>e?e.bricks:'–').join('/'):'—'; tr.appendChild(td5);
     tb.appendChild(tr);
     if(selected && selected.sym===sym){
       const ev=row&&row.ev[selected.k];
@@ -854,14 +868,19 @@ function paintRenko(cv,ev,c){
     x.beginPath();
     x.strokeStyle = veloAt(s+i)>=c.veloMin ? '#d6504a' : '#8b98a6';
     x.moveTo(8+(i-1)*bw+bw/2,Y(p)); x.lineTo(8+i*bw+bw/2,Y(q)); x.stroke(); }
-  // The fast EMA, one flat violet line. It belongs to the ema9 switch, not to the gates,
-  // so it is deliberately a single colour -- nothing about it should read as a signal.
+  // The fast EMA, coloured segment by segment by WHICH SIDE OF EMA21 it is on --
+  // green above, red below -- the same reading as the ema9 plot in your Pine cross
+  // script. Each segment takes the colour at its right-hand brick, so the colour
+  // turns exactly at the cross.
   if(ev.e9){
-    x.beginPath(); x.strokeStyle='#c489d8'; x.lineWidth=1.5; let on=false;
-    for(let i=0;i<N;i++){ const v=ev.e9[s+i]; if(v==null){ on=false; continue; }
-      const px=8+i*bw+bw/2, py=Y(v);
-      if(!on){ x.moveTo(px,py); on=true; } else x.lineTo(px,py); }
-    x.stroke();
+    x.lineWidth=0.95;            // half the EMA21 weight, so the two never read as one line
+    for(let i=1;i<N;i++){
+      const p=ev.e9[s+i-1], q=ev.e9[s+i], slow=ev.e[s+i];
+      if(p==null||q==null||slow==null) continue;
+      x.beginPath();
+      x.strokeStyle = q>slow ? '#22c55e' : '#ef4444';
+      x.moveTo(8+(i-1)*bw+bw/2,Y(p)); x.lineTo(8+i*bw+bw/2,Y(q)); x.stroke();
+    }
   }
   return {N,s};
 }
@@ -961,7 +980,7 @@ function paintRsi(cv,d,c){
 // under your finger. Nothing lives at the foot of the page any more.
 function buildDetailRow(tb,sym,pct,ev,c){
   const tr=document.createElement('tr'); tr.className='detailrow';
-  const td=document.createElement('td'); td.colSpan=3+c.bricks.length; tr.appendChild(td);
+  const td=document.createElement('td'); td.colSpan=2+c.bricks.length; tr.appendChild(td);
   const nb=(store[sym]&&store[sym].bars.length)||0;
   const g=ev.gates, mk=(label,val,pass)=>
     `<div class="ro ${pass?'pass':'fail'}"><div class="k">${label}</div><div class="v">${val}</div></div>`;
@@ -975,7 +994,8 @@ function buildDetailRow(tb,sym,pct,ev,c){
         `<div class="plabel">renko · ST <span style="color:#16a34a">up</span>/`+
         `<span style="color:#dc2626">down</span> · ema${c.emaLen} `+
         `<span style="color:#d6504a">red</span> = velocity ≥ ${c.veloMin}% · `+
-        `<span style="color:#c489d8">ema${c.emaFast}</span>`+
+        `ema${c.emaFast} <span style="color:#22c55e">above</span>/`+
+        `<span style="color:#ef4444">below</span> ema${c.emaLen}`+
         (ev.e9L||ev.e9S ? ` · <span style="color:#f8b4d9">ema9 setup: ${ev.e9L?'LONG':'SHORT'}</span>` : '')+
         `</div>`+
         `<canvas class="cvRr"></canvas>`+
@@ -1038,6 +1058,9 @@ async function scan(){
       // Fetch, then DEEPEN automatically if the biggest brick size came up short. You
       // should not have to guess a number of days: the only thing that matters is
       // whether enough bricks exist, and the scanner can see that for itself.
+      // The daily bar is fetched alongside, never in series -- a failure there must
+      // cost the row nothing, so it is caught separately and the score stands without it.
+      const dayP = loadDayOpen(sym).catch(()=>{});
       let st=await loadSymbol(sym,c);
       let ev=c.bricks.map(p=>evaluate(st.bars,p,c,sym));
       let tries=0;
@@ -1047,6 +1070,7 @@ async function scan(){
         st=await loadSymbol(sym,c,deeper);
         ev=c.bricks.map(p=>evaluate(st.bars,p,c,sym));
       }
+      await dayP;
       results[sym]={last:st.bars[st.bars.length-1].c, ev};
     }catch(e){ failed++; if(!firstErr)firstErr=e; results[sym]={last:null,ev:c.bricks.map(()=>null)}; }
     done++; render(c);
